@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Local-only helper to populate and maintain a personal .env file with API tokens and identity variables"
 readme = "README.md"
 authors = [
-    { name = "Osama Masoud" }
+    { name = "Osama Masoud", email = "osama.masoud@gmail.com"}
 ]
 requires-python = ">=3.14"
 dependencies = [
