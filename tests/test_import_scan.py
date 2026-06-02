@@ -41,6 +41,30 @@ def _config():
     )
 
 
+def _casefold_derived_config():
+    return build_effective_config(
+        {
+            "identities": {
+                "WORK_EMAIL": {"source": "literal", "value": "user@example.com"},
+            },
+            "derived": {
+                "WORK_USERNAME": {
+                    "from_identity": "WORK_EMAIL",
+                    "compare": "casefold",
+                },
+            },
+            "services": {
+                "EXAMPLE": {
+                    "display_name": "Example",
+                    "token_var": "EXAMPLE_TOKEN",
+                    "token_url": "https://example.com/token",
+                    "test_url": "https://example.com/me",
+                }
+            },
+        }
+    )
+
+
 def _empty_state(tmp_path: Path) -> tuple[EnvDocument, object]:
     env = tmp_path / ".env"
     env.write_text("", encoding="utf-8")
@@ -126,6 +150,25 @@ def test_scan_no_change_and_replace(tmp_path: Path) -> None:
     assert rows["WORK_USERNAME"].status == "replace"
 
 
+def test_scan_uses_casefold_compare_for_derived_no_change(tmp_path: Path) -> None:
+    env = tmp_path / ".env"
+    env.write_text(
+        "EXAMPLE_TOKEN=TokenValue\nWORK_USERNAME=User@Example.com\n",
+        encoding="utf-8",
+    )
+    doc = EnvDocument.from_path(env)
+    scan = scan_source_text(
+        source_label="src",
+        source_text="EXAMPLE_TOKEN=tokenvalue\nWORK_USERNAME=user@example.com\n",
+        current_doc=doc,
+        config=_casefold_derived_config(),
+    )
+
+    rows = {r.source_key: r for r in scan.proposed_rows}
+    assert rows["EXAMPLE_TOKEN"].status == "replace"
+    assert rows["WORK_USERNAME"].status == "no_change"
+
+
 def test_scan_skips_configured_identity_but_not_old_meta(tmp_path: Path) -> None:
     doc, cfg = _empty_state(tmp_path)
     scan = scan_source_text(
@@ -198,6 +241,40 @@ def test_build_updates_recomputes_no_change_at_commit_time(tmp_path: Path) -> No
     )
 
     assert updates == {"WORK_USERNAME": "user@example.com"}
+
+
+def test_build_updates_uses_casefold_compare_for_derived_no_change(
+    tmp_path: Path,
+) -> None:
+    cfg = _casefold_derived_config()
+    env = tmp_path / ".env"
+    env.write_text("", encoding="utf-8")
+    doc = EnvDocument.from_path(env)
+    scan = scan_source_text(
+        source_label="src",
+        source_text="EXAMPLE_TOKEN=tokenvalue\nWORK_USERNAME=user@example.com\n",
+        current_doc=doc,
+        config=cfg,
+    )
+    latest_env = tmp_path / "latest.env"
+    latest_env.write_text(
+        "EXAMPLE_TOKEN=TokenValue\nWORK_USERNAME=User@Example.com\n",
+        encoding="utf-8",
+    )
+    latest_doc = EnvDocument.from_path(latest_env)
+
+    updates = build_updates_from_choices(
+        scan,
+        [
+            ("EXAMPLE_TOKEN", "EXAMPLE_TOKEN"),
+            ("WORK_USERNAME", "WORK_USERNAME"),
+        ],
+        allowed_targets={"EXAMPLE_TOKEN", "WORK_USERNAME"},
+        current_doc=latest_doc,
+        config=cfg,
+    )
+
+    assert updates == {"EXAMPLE_TOKEN": "tokenvalue"}
 
 
 def test_build_updates_rejects_invalid_target(tmp_path: Path) -> None:

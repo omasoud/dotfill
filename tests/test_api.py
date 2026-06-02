@@ -134,6 +134,44 @@ def test_state_returns_payload(client: TestClient, ctx: AppContext) -> None:
     assert {"SERVICE_A", "SERVICE_B"}.issubset(service_ids)
 
 
+def test_state_masks_configured_identity_and_derived_values(
+    client: TestClient,
+    ctx: AppContext,
+    config_root: Path,
+    env_path: Path,
+) -> None:
+    config_file = config_root / "config.toml"
+    config_file.write_text(
+        config_file.read_text(encoding="utf-8")
+        .replace(
+            'value = "alice@example.com"',
+            'value = "alice@example.com"\ndisplay = "masked"',
+        )
+        .replace(
+            "[derived.WORK_USERNAME]\nfrom_identity = \"WORK_EMAIL\"",
+            (
+                "[derived.WORK_USERNAME]\n"
+                "from_identity = \"WORK_EMAIL\"\n"
+                "display = \"masked\""
+            ),
+        ),
+        encoding="utf-8",
+    )
+    env_path.write_text("WORK_USERNAME=alice@example.com\n", encoding="utf-8")
+
+    r = client.get("/api/state", headers=_headers(ctx))
+
+    assert r.status_code == 200
+    body = r.json()
+    work_email = next(i for i in body["identities"] if i["name"] == "WORK_EMAIL")
+    derived = next(d for d in body["derived"] if d["variable_name"] == "WORK_USERNAME")
+    assert work_email["effective_value"] == "••••••••.com"
+    assert work_email["detected_value"] == "••••••••.com"
+    assert derived["current_value"] == "••••••••.com"
+    assert derived["computed_default"] == "••••••••.com"
+    assert "alice@example.com" not in r.text
+
+
 def test_state_invalid_config_error_is_non_secret(tmp_path: Path) -> None:
     config_root = tmp_path / "config"
     config_root.mkdir()

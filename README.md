@@ -148,13 +148,16 @@ from dotfill.entrypoints import run_dotfill
 
 raise SystemExit(
     run_dotfill(
-        default_profile="team",
+        locked_profile="team",
         before_config_load=sync_managed_config,
     )
 )
 ```
 
-Wrappers should not import the Typer app directly. User overrides remain in `config.toml`.
+Use `locked_profile` when the wrapper command should always mean one profile.
+Use `default_profile` only when CLI `--profile` or `DOTFILL_PROFILE` should be
+allowed to select another profile. Wrappers should not import the Typer app
+directly. User overrides remain in `config.toml`.
 
 ## Development
 

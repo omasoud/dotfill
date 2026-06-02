@@ -6,6 +6,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+DisplayMode = Literal["plain", "masked"]
+CompareMode = Literal["exact", "casefold"]
+
 
 @dataclass(frozen=True)
 class TargetConfig:
@@ -29,6 +32,8 @@ class IdentityDefinition:
     source: str
     params: dict[str, object] = field(default_factory=dict)
     enabled: bool = True
+    display: DisplayMode = "plain"
+    compare: CompareMode = "exact"
 
 
 @dataclass(frozen=True)
@@ -37,6 +42,8 @@ class DerivedVariableDefinition:
 
     variable_name: str
     source_identity_name: str
+    display: DisplayMode = "plain"
+    compare: CompareMode = "exact"
 
 
 @dataclass(frozen=True)

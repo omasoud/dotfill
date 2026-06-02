@@ -74,6 +74,17 @@ def test_resolve_primary_identity_aligned() -> None:
     assert source == "aligned"
 
 
+def test_resolve_primary_identity_casefold_aligned_preserves_explicit() -> None:
+    value, source = resolve_primary_identity(
+        name="WORK_EMAIL",
+        detected="same@example.com",
+        explicit="Same@Example.com",
+        compare="casefold",
+    )
+    assert value == "Same@Example.com"
+    assert source == "aligned"
+
+
 def test_resolve_primary_identity_detected_fallback() -> None:
     value, source = resolve_primary_identity(
         name="WORK_EMAIL", detected="det@example.com", explicit=None

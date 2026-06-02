@@ -10,6 +10,21 @@ version = 1
 
 The schema is strict: unknown top-level sections and unknown fields inside known tables are rejected instead of ignored.
 
+## Display and Comparison Metadata
+
+Identity and derived-variable tables support optional metadata:
+
+| Field | Values | Default | Description |
+|---|---|---|---|
+| `display` | `plain`, `masked` | `plain` | Controls whether CLI/API/UI output shows the full value or a masked value. |
+| `compare` | `exact`, `casefold` | `exact` | Controls equality checks for identity and derived status. |
+
+`display = "masked"` does not change stored values. It only masks values before they leave the backend in CLI/API/UI output.
+
+`compare = "casefold"` uses Python `str.casefold()` for equality. It can make casing-only differences count as aligned/no-change, but dotfill does not rewrite values just to normalize casing.
+
+Service token values are always masked and always compared exactly; service tables do not support `display` or `compare`.
+
 ## Layering
 
 Later layers override earlier layers.
@@ -102,6 +117,8 @@ version = 1
 [identities.WORK_EMAIL]
 source = "literal"
 value = "alice@example.com"
+display = "plain"
+compare = "exact"
 ```
 
 ### Environment Variable
@@ -163,6 +180,8 @@ Supported sources:
 
 All identity tables support `enabled = false`.
 
+Identity `compare` controls whether explicit `.env` identity values align with detected values. With `compare = "casefold"`, `Alice@Example.com` and `alice@example.com` are aligned, and the explicit `.env` value remains the effective value.
+
 ## Derived Variables
 
 Derived keys must be valid environment variable names.
@@ -176,14 +195,20 @@ value = "alice@example.com"
 
 [derived.WORK_USERNAME]
 from_identity = "WORK_EMAIL"
+display = "plain"
+compare = "exact"
 ```
 
 | Field | Required | Description |
 |---|---:|---|
 | `from_identity` | yes | Enabled identity to copy when filling the derived variable. |
 | `enabled` | no | Defaults to `true`; `false` removes the derived variable. |
+| `display` | no | Defaults to `plain`; use `masked` to mask CLI/API/UI output. |
+| `compare` | no | Defaults to `exact`; use `casefold` for case-insensitive equality. |
 
 Enabled derived variables may be filled when saving a token. Disabled derived variables are not written.
+
+Derived `compare` controls aligned/diverged status and import no-change checks for derived targets. It does not affect service token comparisons.
 
 ## Services
 

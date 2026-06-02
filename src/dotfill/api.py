@@ -42,6 +42,7 @@ from .open_paths import open_directory, open_env_location
 from .resolver import build_app_state, service_icon, service_test_fingerprint
 from .save import save_assignments
 from .service_test import run_service_test
+from .value_policy import display_value
 
 log = logging.getLogger(__name__)
 
@@ -92,9 +93,18 @@ def _identity_payload(state: AppState) -> list[dict[str, object]]:
     return [
         {
             "name": i.name,
-            "detected_value": i.detected_value,
-            "explicit_value": i.explicit_value,
-            "effective_value": i.effective_value,
+            "detected_value": display_value(
+                i.detected_value,
+                state.effective_config.identities[i.name].display,
+            ),
+            "explicit_value": display_value(
+                i.explicit_value,
+                state.effective_config.identities[i.name].display,
+            ),
+            "effective_value": display_value(
+                i.effective_value,
+                state.effective_config.identities[i.name].display,
+            ),
             "source": i.source,
         }
         for i in state.identities
@@ -105,8 +115,14 @@ def _derived_payload(state: AppState) -> list[dict[str, object]]:
     return [
         {
             "variable_name": d.variable_name,
-            "current_value": d.current_value,
-            "computed_default": d.computed_default,
+            "current_value": display_value(
+                d.current_value,
+                state.effective_config.derived_variables[d.variable_name].display,
+            ),
+            "computed_default": display_value(
+                d.computed_default,
+                state.effective_config.derived_variables[d.variable_name].display,
+            ),
             "source_identity_name": d.source_identity_name,
             "status": d.status,
         }
@@ -416,6 +432,7 @@ def create_app(ctx: AppContext) -> FastAPI:
             choices,
             allowed_targets=allowed_targets,
             current_doc=state.env_doc,
+            config=state.effective_config,
         )
         save_assignments(state.env_path, state.env_doc, updates, ctx_in.session)
         log.info(

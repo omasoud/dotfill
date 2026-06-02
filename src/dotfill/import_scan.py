@@ -14,12 +14,26 @@ from .models import (
     ImportMappingRow,
     ImportScanSession,
 )
+from .value_policy import mask_value, values_equal
 
 
 def _mask_value(value: str) -> str:
-    if len(value) <= 4:
-        return "••••"
-    return "••••••••" + value[-4:]
+    return mask_value(value)
+
+
+def _target_values_equal(
+    target_key: str,
+    current_value: str,
+    candidate_value: str,
+    config: EffectiveConfig | None,
+) -> bool:
+    if config is None or target_key not in config.derived_variables:
+        return current_value == candidate_value
+    return values_equal(
+        current_value,
+        candidate_value,
+        config.derived_variables[target_key].compare,
+    )
 
 
 def scan_source_text(
@@ -76,7 +90,7 @@ def scan_source_text(
             current_value = current_doc.get(target)
             if current_value is None:
                 status = "new"
-            elif current_value == value:
+            elif _target_values_equal(target, current_value, value, config):
                 status = "no_change"
             else:
                 status = "replace"
@@ -131,6 +145,7 @@ def build_updates_from_choices(
     *,
     allowed_targets: set[str] | None = None,
     current_doc: EnvDocument | None = None,
+    config: EffectiveConfig | None = None,
 ) -> dict[str, str]:
     """Materialize {target_var: raw_value} from user-chosen mappings.
 
@@ -154,7 +169,14 @@ def build_updates_from_choices(
             )
         selected_targets.add(target_key)
         value = scan.candidates[source_key].get_secret_value()
-        if current_doc is not None and current_doc.get(target_key) == value:
-            continue
+        if current_doc is not None:
+            current_value = current_doc.get(target_key)
+            if current_value is not None and _target_values_equal(
+                target_key,
+                current_value,
+                value,
+                config,
+            ):
+                continue
         updates[target_key] = value
     return updates

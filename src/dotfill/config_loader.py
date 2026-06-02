@@ -7,11 +7,13 @@ import re
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .config_merge import merge_config_layers
 from .config_models import (
+    CompareMode,
     DerivedVariableDefinition,
+    DisplayMode,
     EffectiveConfig,
     IdentityDefinition,
     IdentityDetectorConfig,
@@ -53,6 +55,9 @@ _IDENTITY_SOURCE_FIELDS = {
     "windows_ad.sam": set(),
     "windows_ad.domain": set(),
 }
+_METADATA_FIELDS = {"display", "compare"}
+_DISPLAY_VALUES = {"plain", "masked"}
+_COMPARE_VALUES = {"exact", "casefold"}
 _SERVICE_FIELDS = {
     "auth",
     "display_name",
@@ -167,18 +172,28 @@ def _build_identities(data: Mapping[str, Any]) -> dict[str, IdentityDefinition]:
                 raise ConfigSchemaError(
                     f"identities.{name}.source: unsupported identity source {source!r}"
                 )
-            allowed = {"enabled", "source"} | _IDENTITY_SOURCE_FIELDS[source]
+            allowed = (
+                {"enabled", "source"}
+                | _METADATA_FIELDS
+                | _IDENTITY_SOURCE_FIELDS[source]
+            )
         else:
-            allowed = {"enabled"}
+            allowed = {"enabled"} | _METADATA_FIELDS
         _reject_unknown_keys(section, allowed, f"identities.{name}")
         if not enabled:
             continue
+        display = _optional_display(
+            section, "display", f"identities.{name}.display"
+        )
+        compare = _optional_compare(
+            section, "compare", f"identities.{name}.compare"
+        )
         if source is None:
             source = _required_str(section, "source", f"identities.{name}.source")
         params = {
             str(k): v
             for k, v in section.items()
-            if k not in {"enabled", "source"}
+            if k not in {"enabled", "source", "display", "compare"}
         }
         _validate_identity_source_fields(name, source, params)
         out[name] = IdentityDefinition(
@@ -186,6 +201,8 @@ def _build_identities(data: Mapping[str, Any]) -> dict[str, IdentityDefinition]:
             enabled=True,
             source=source,
             params=params,
+            display=display,
+            compare=compare,
         )
     _validate_identity_references(out)
     return out
@@ -199,13 +216,19 @@ def _build_derived(
     out: dict[str, DerivedVariableDefinition] = {}
     for name in sorted(data):
         section = _required_table(data, name, f"derived.{name}")
-        _reject_unknown_keys(section, {"enabled", "from_identity"}, f"derived.{name}")
+        _reject_unknown_keys(
+            section,
+            {"enabled", "from_identity"} | _METADATA_FIELDS,
+            f"derived.{name}",
+        )
         _validate_var_name(name, f"derived.{name}")
         enabled = _optional_bool(
             section, "enabled", f"derived.{name}.enabled", default=True
         )
         if not enabled:
             continue
+        display = _optional_display(section, "display", f"derived.{name}.display")
+        compare = _optional_compare(section, "compare", f"derived.{name}.compare")
         source = _required_str(section, "from_identity", f"derived.{name}.from_identity")
         if source not in identities:
             raise ConfigSchemaError(
@@ -214,6 +237,8 @@ def _build_derived(
         out[name] = DerivedVariableDefinition(
             variable_name=name,
             source_identity_name=source,
+            display=display,
+            compare=compare,
         )
     return out
 
@@ -417,6 +442,32 @@ def _optional_str(data: Mapping[str, Any], key: str, path: str) -> str | None:
     if not isinstance(value, str):
         raise ConfigSchemaError(f"{path}: expected string")
     return value
+
+
+def _optional_display(
+    data: Mapping[str, Any],
+    key: str,
+    path: str,
+) -> DisplayMode:
+    value = _optional_str(data, key, path)
+    if value is None:
+        return "plain"
+    if value not in _DISPLAY_VALUES:
+        raise ConfigSchemaError(f"{path}: unsupported display value {value!r}")
+    return cast(DisplayMode, value)
+
+
+def _optional_compare(
+    data: Mapping[str, Any],
+    key: str,
+    path: str,
+) -> CompareMode:
+    value = _optional_str(data, key, path)
+    if value is None:
+        return "exact"
+    if value not in _COMPARE_VALUES:
+        raise ConfigSchemaError(f"{path}: unsupported compare value {value!r}")
+    return cast(CompareMode, value)
 
 
 def _optional_bool(

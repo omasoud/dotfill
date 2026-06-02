@@ -7,7 +7,9 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 
+from .config_models import CompareMode
 from .identity_facts import ADFacts, make_ad_facts
+from .value_policy import values_equal
 
 log = logging.getLogger(__name__)
 
@@ -122,7 +124,11 @@ def detect_ad_facts() -> ADFacts:
 
 
 def resolve_primary_identity(
-    *, name: str, detected: str | None, explicit: str | None
+    *,
+    name: str,
+    detected: str | None,
+    explicit: str | None,
+    compare: CompareMode = "exact",
 ) -> tuple[str | None, str]:
     """Apply effective-value resolution for a primary identity.
 
@@ -131,7 +137,10 @@ def resolve_primary_identity(
     """
     if explicit is not None and explicit != "":
         if detected is not None and detected != "":
-            return explicit, "aligned" if explicit == detected else "diverged"
+            return (
+                explicit,
+                "aligned" if values_equal(explicit, detected, compare) else "diverged",
+            )
         return explicit, "aligned"
     if detected is not None and detected != "":
         return detected, "detected"

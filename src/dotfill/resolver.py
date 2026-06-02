@@ -25,14 +25,13 @@ from .models import (
     TestResult,
 )
 from .paths import default_env_path
+from .value_policy import mask_value, values_equal
 
 DEFAULT_SERVICE_ICON = "key"
 
 
 def _mask_token(value: str) -> str:
-    if len(value) <= 4:
-        return "••••"
-    return "••••••••" + value[-4:]
+    return mask_value(value)
 
 
 def service_icon(icon_key: str | None) -> str:
@@ -88,17 +87,20 @@ def _resolve_env_path(
 
 def build_primary_identities(
     doc: EnvDocument,
+    config: EffectiveConfig,
     detected: dict[str, IdentityRuleResult],
 ) -> list[PrimaryIdentityState]:
     """Resolve configured identities using explicit `.env` overrides first."""
     out: list[PrimaryIdentityState] = []
     for name in sorted(detected):
+        definition = config.identities[name]
         explicit = doc.get(name)
         det = detected[name].value
         effective, source = resolve_primary_identity(
             name=name,
             detected=det,
             explicit=explicit,
+            compare=definition.compare,
         )
         out.append(
             PrimaryIdentityState(
@@ -129,7 +131,7 @@ def build_derived_states(
             )
         if current in (None, ""):
             status = "missing"
-        elif current == source_value:
+        elif values_equal(current, source_value, definition.compare):
             status = "aligned"
         else:
             status = "diverged"
@@ -234,7 +236,7 @@ def build_app_state(
         ad_facts=ad_facts,
         explicit_values=explicit_identity_values,
     )
-    identities = build_primary_identities(doc, detected)
+    identities = build_primary_identities(doc, config, detected)
     identity_values: dict[str, str | None] = {
         identity.name: identity.effective_value for identity in identities
     }

@@ -140,6 +140,33 @@ def test_explicit_identity_overrides_detected(tmp_path: Path) -> None:
     assert by_name["WORK_EMAIL"].source == "diverged"
 
 
+def test_casefold_identity_alignment_preserves_explicit_value(tmp_path: Path) -> None:
+    env = tmp_path / ".env"
+    env.write_text("WORK_EMAIL=Alice@Example.com\n", encoding="utf-8")
+    config_root = tmp_path / "config"
+    config_root.mkdir()
+    (config_root / "config.toml").write_text(
+        f"""
+version = 1
+
+[target]
+default_env_path = "{env.as_posix()}"
+
+[identities.WORK_EMAIL]
+source = "literal"
+value = "alice@example.com"
+compare = "casefold"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    state = build_app_state(_context(config_root), _session())
+
+    identity = state.identities[0]
+    assert identity.source == "aligned"
+    assert identity.effective_value == "Alice@Example.com"
+
+
 def test_local_part_uses_effective_upstream_identity_from_env(tmp_path: Path) -> None:
     env = tmp_path / ".env"
     env.write_text("WORK_EMAIL=manual@example.com\n", encoding="utf-8")
@@ -229,6 +256,37 @@ def test_derived_status_missing_aligned_diverged(tmp_path: Path) -> None:
     by_name = {d.variable_name: d for d in state.derived}
     derived = by_name["WORK_USERNAME"]
     assert derived.status == "diverged"
+    assert derived.computed_default == "alice@example.com"
+
+
+def test_casefold_derived_alignment_preserves_current_value(tmp_path: Path) -> None:
+    env = tmp_path / ".env"
+    env.write_text("WORK_USERNAME=Alice@Example.com\n", encoding="utf-8")
+    config_root = tmp_path / "config"
+    config_root.mkdir()
+    (config_root / "config.toml").write_text(
+        f"""
+version = 1
+
+[target]
+default_env_path = "{env.as_posix()}"
+
+[identities.WORK_EMAIL]
+source = "literal"
+value = "alice@example.com"
+
+[derived.WORK_USERNAME]
+from_identity = "WORK_EMAIL"
+compare = "casefold"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    state = build_app_state(_context(config_root), _session())
+
+    derived = state.derived[0]
+    assert derived.status == "aligned"
+    assert derived.current_value == "Alice@Example.com"
     assert derived.computed_default == "alice@example.com"
 
 

@@ -26,10 +26,11 @@ This document records the current implementation state, verification expectation
 - [x] Managed variables are enabled identities, enabled derived variables, and enabled service token variables.
 - [x] Duplicate managed variables block state construction with line-number context.
 - [x] Identity rules support `literal`, `env`, `local_part`, `windows_ad.email_by_domain`, `windows_ad.sam`, and `windows_ad.domain`.
+- [x] Identity and derived definitions support `display = "plain" | "masked"` and `compare = "exact" | "casefold"` metadata.
 - [x] Windows AD probing returns generic facts only and runs only when an enabled identity needs AD facts.
-- [x] Explicit non-empty `.env` identity overrides participate in identity state as aligned, diverged, or unresolved.
+- [x] Explicit non-empty `.env` identity overrides participate in identity state as aligned, diverged, or unresolved, using configured comparison metadata.
 - [x] dotfill never writes identity variables automatically.
-- [x] Derived variables copy enabled identities and are filled only when missing or empty during token saves.
+- [x] Derived variables copy enabled identities, use configured comparison metadata for aligned/diverged state, and are filled only when missing or empty during token saves.
 - [x] Save flow writes the selected service token plus missing enabled derived variables.
 - [x] Service tests support bearer authentication only.
 - [x] Service tests send `Authorization: Bearer <token>` and `Accept: application/json`, verify TLS by default, and classify status safely.
@@ -37,14 +38,15 @@ This document records the current implementation state, verification expectation
 - [x] Import scans target enabled service token variables and enabled derived variables; identities are never import targets.
 - [x] Import scans skip empty source values and return masked values only.
 - [x] Import aliases are configured in TOML and never hardcoded.
-- [x] Import commit validates selected targets against current effective config, rejects duplicate selected targets, recomputes latest status, skips no-change rows, and invalidates affected service test status.
+- [x] Import commit validates selected targets against current effective config, rejects duplicate selected targets, recomputes latest status, skips no-change rows using derived comparison metadata where applicable, and invalidates affected service test status.
 - [x] Import wizard tracks typed path, selected file, and dropped file sources separately.
 - [x] Browse mode displays `Selected file: <filename>` and rescans cached file content.
 - [x] Drop mode displays `Dropped file: <filename>` and rescans cached file content.
 - [x] Manual edits to the import source field switch back to typed-path mode.
 - [x] CLI supports default launch, `serve`, `status`, `config path`, `config open`, `--config-root`, `--profile`, `--env-path`, and `--verbose`.
 - [x] Stable wrapper-facing entrypoints are exposed through `dotfill.entrypoints`.
-- [x] `run_dotfill(...) -> int` supports `config_dir`, `config_root`, `profile`, `default_profile`, `env_path`, `argv`, `program_name`, and `before_config_load`.
+- [x] `run_dotfill(...) -> int` supports `config_dir`, `config_root`, `profile`, `default_profile`, `locked_profile`, `env_path`, `argv`, `program_name`, and `before_config_load`.
+- [x] Wrapper entrypoints can use `locked_profile` to enforce one profile while preserving config-root, env-path, argv, program-name, and before-config-load behavior.
 - [x] Local server binds to `127.0.0.1`; `/api/bootstrap` is public and all other API endpoints require `X-Dotfill-Session`.
 - [x] Mutating API endpoints reject unexpected non-local `Origin` headers and emit no permissive CORS headers.
 - [x] Domain errors map to non-secret JSON responses.
@@ -79,59 +81,59 @@ Focused verification areas:
 - [x] Build artifact inspection includes static assets such as `app.js`, `app.css`, and helper modules.
 
 
-## Planned Implementation: Locked Wrapper Profiles
+## Implemented: Locked Wrapper Profiles
 
 Goal: let wrappers enforce one profile through the stable entrypoint.
 
-- [ ] Add `locked_profile: str | None = None` to `run_dotfill(...)`.
-- [ ] Validate entrypoint combinations: `locked_profile` cannot be combined with
+- [x] Add `locked_profile: str | None = None` to `run_dotfill(...)`.
+- [x] Validate entrypoint combinations: `locked_profile` cannot be combined with
       `config_dir`, `profile`, or `default_profile`.
-- [ ] Preserve valid wrapper inputs with locked profiles: `config_root`,
+- [x] Preserve valid wrapper inputs with locked profiles: `config_root`,
       `env_path`, `argv`, `program_name`, and `before_config_load`.
-- [ ] Enforce locked profile resolution in the CLI callback so the resolved
+- [x] Enforce locked profile resolution in the CLI callback so the resolved
       `ConfigContext.profile` is always the locked profile.
-- [ ] Accept redundant CLI `--profile <locked>` and reject CLI
+- [x] Accept redundant CLI `--profile <locked>` and reject CLI
       `--profile <other>` with a clean CLI error.
-- [ ] Accept absent `DOTFILL_PROFILE` and matching `DOTFILL_PROFILE=<locked>`;
+- [x] Accept absent `DOTFILL_PROFILE` and matching `DOTFILL_PROFILE=<locked>`;
       reject non-matching `DOTFILL_PROFILE`.
-- [ ] Keep `--config-root` precedence working with locked profiles.
-- [ ] Add focused tests for valid locked-profile context resolution, invalid
+- [x] Keep `--config-root` precedence working with locked profiles.
+- [x] Add focused tests for valid locked-profile context resolution, invalid
       entrypoint combinations, CLI profile mismatch, environment profile
       mismatch, redundant matching profile input, `--config-root`, and
       `before_config_load` timing.
-- [ ] Update public README and user docs for wrapper authors after the API is
+- [x] Update public README and user docs for wrapper authors after the API is
       implemented.
 
-## Planned Implementation: Identity and Derived Display/Compare Metadata
+## Implemented: Identity and Derived Display/Compare Metadata
 
 Goal: allow generic TOML config to control presentation and equality semantics
 for identity-like values without changing service-token secrecy rules.
 
-- [ ] Add config model fields for identity and derived metadata:
+- [x] Add config model fields for identity and derived metadata:
       `display = "plain" | "masked"` and
       `compare = "exact" | "casefold"`.
-- [ ] Validate the new fields in strict TOML schema loading, with defaults
+- [x] Validate the new fields in strict TOML schema loading, with defaults
       `display = "plain"` and `compare = "exact"`.
-- [ ] Add shared helpers for display masking and comparison equality.
-- [ ] Apply identity `compare` when resolving explicit `.env` identity values
+- [x] Add shared helpers for display masking and comparison equality.
+- [x] Apply identity `compare` when resolving explicit `.env` identity values
       against detected values.
-- [ ] Apply derived `compare` when computing derived `aligned`/`diverged`
+- [x] Apply derived `compare` when computing derived `aligned`/`diverged`
       status.
-- [ ] Apply derived `compare` to import scan and commit no-change detection for
+- [x] Apply derived `compare` to import scan and commit no-change detection for
       derived targets.
-- [ ] Keep service token display and comparison behavior unchanged: always
+- [x] Keep service token display and comparison behavior unchanged: always
       masked, always exact.
-- [ ] Ensure comparison metadata never normalizes or rewrites stored values by
+- [x] Ensure comparison metadata never normalizes or rewrites stored values by
       itself.
-- [ ] Apply identity/derived `display` to API responses, CLI `status`, and
+- [x] Apply identity/derived `display` to API responses, CLI `status`, and
       dashboard rendering so masked items do not expose raw values.
-- [ ] Keep import scan source previews masked regardless of target display
+- [x] Keep import scan source previews masked regardless of target display
       metadata.
-- [ ] Add focused tests for schema validation/defaults, identity casefold
+- [x] Add focused tests for schema validation/defaults, identity casefold
       alignment, derived casefold alignment, derived import no-change behavior,
       masked identity/derived API payloads, masked CLI status output, and
       unchanged service-token behavior.
-- [ ] Update `docs/config-schema.md`, getting-started/troubleshooting examples
+- [x] Update `docs/config-schema.md`, getting-started/troubleshooting examples
       as needed, and README references after implementation.
 
 

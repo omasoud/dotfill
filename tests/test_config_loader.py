@@ -81,6 +81,10 @@ def test_loads_only_common_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert set(cfg.derived_variables) == {"WORK_USERNAME"}
     assert set(cfg.services) == {"EXAMPLE"}
     assert set(cfg.import_aliases) == {"OLD_EXAMPLE_TOKEN"}
+    assert cfg.identities["WORK_EMAIL"].display == "plain"
+    assert cfg.identities["WORK_EMAIL"].compare == "exact"
+    assert cfg.derived_variables["WORK_USERNAME"].display == "plain"
+    assert cfg.derived_variables["WORK_USERNAME"].compare == "exact"
 
 
 def test_loads_only_user_config(tmp_path: Path) -> None:
@@ -89,6 +93,101 @@ def test_loads_only_user_config(tmp_path: Path) -> None:
     cfg = load_effective_config(_context(tmp_path))
 
     assert cfg.services["EXAMPLE"].display_name == "Example"
+
+
+def test_identity_and_derived_metadata_load(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "config.toml",
+        """
+version = 1
+
+[identities.WORK_EMAIL]
+source = "literal"
+value = "user@example.com"
+display = "masked"
+compare = "casefold"
+
+[derived.WORK_USERNAME]
+from_identity = "WORK_EMAIL"
+display = "masked"
+compare = "casefold"
+""".strip(),
+    )
+
+    cfg = load_effective_config(_context(tmp_path))
+
+    identity = cfg.identities["WORK_EMAIL"]
+    derived = cfg.derived_variables["WORK_USERNAME"]
+    assert identity.display == "masked"
+    assert identity.compare == "casefold"
+    assert derived.display == "masked"
+    assert derived.compare == "casefold"
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        (
+            """
+version = 1
+
+[identities.WORK_EMAIL]
+source = "literal"
+value = "user@example.com"
+display = "hidden"
+""",
+            "unsupported display",
+        ),
+        (
+            """
+version = 1
+
+[identities.WORK_EMAIL]
+source = "literal"
+value = "user@example.com"
+compare = "lower"
+""",
+            "unsupported compare",
+        ),
+        (
+            """
+version = 1
+
+[identities.WORK_EMAIL]
+source = "literal"
+value = "user@example.com"
+
+[derived.WORK_USERNAME]
+from_identity = "WORK_EMAIL"
+display = "hidden"
+""",
+            "unsupported display",
+        ),
+        (
+            """
+version = 1
+
+[identities.WORK_EMAIL]
+source = "literal"
+value = "user@example.com"
+
+[derived.WORK_USERNAME]
+from_identity = "WORK_EMAIL"
+compare = "lower"
+""",
+            "unsupported compare",
+        ),
+    ],
+)
+def test_invalid_display_and_compare_values_raise(
+    body: str,
+    message: str,
+    tmp_path: Path,
+) -> None:
+    _write(tmp_path / "config.toml", body.strip())
+
+    with pytest.raises(ConfigSchemaError, match=message):
+        load_effective_config(_context(tmp_path))
 
 
 def test_user_config_scalar_overrides_common(tmp_path: Path) -> None:

@@ -20,6 +20,7 @@ from .models import SessionState
 from .open_paths import open_directory
 from .resolver import build_app_state
 from .server import run_server
+from .value_policy import display_value
 
 app = typer.Typer(
     name="dotfill",
@@ -33,6 +34,17 @@ app.add_typer(config_app, name="config")
 
 def _make_session() -> SessionState:
     return SessionState(token=secrets.token_urlsafe(32))
+
+
+def _locked_profile_error(
+    value: str,
+    locked_profile: str,
+    source: str,
+) -> typer.BadParameter:
+    return typer.BadParameter(
+        f"{source} profile {value!r} does not match locked profile "
+        f"{locked_profile!r}"
+    )
 
 
 @app.callback()
@@ -70,13 +82,27 @@ def _main(
         entry_config_root = ctx.obj.get("entry_config_root")
         entry_profile = ctx.obj.get("entry_profile")
         entry_default_profile = ctx.obj.get("entry_default_profile")
-        effective_profile = profile if profile is not None else entry_profile
-        if (
-            effective_profile is None
-            and entry_default_profile is not None
-            and PROFILE_ENV not in os.environ
-        ):
-            effective_profile = entry_default_profile
+        entry_locked_profile = ctx.obj.get("entry_locked_profile")
+        if entry_locked_profile is not None:
+            locked_profile = str(entry_locked_profile)
+            if profile is not None and profile != locked_profile:
+                raise _locked_profile_error(profile, locked_profile, "--profile")
+            env_profile = os.environ.get(PROFILE_ENV)
+            if env_profile not in (None, "", locked_profile):
+                raise _locked_profile_error(
+                    env_profile,
+                    locked_profile,
+                    PROFILE_ENV,
+                )
+            effective_profile = locked_profile
+        else:
+            effective_profile = profile if profile is not None else entry_profile
+            if (
+                effective_profile is None
+                and entry_default_profile is not None
+                and PROFILE_ENV not in os.environ
+            ):
+                effective_profile = entry_default_profile
         config_context = resolve_config_context(
             config_root=config_root if config_root is not None else entry_config_root,
             profile=effective_profile,
@@ -156,11 +182,15 @@ def status(ctx: typer.Context) -> None:
         typer.echo(f"profile: {state.config_context.profile}")
     typer.echo("identities:")
     for i in state.identities:
-        eff = i.effective_value or "(unresolved)"
+        identity_display = state.effective_config.identities[i.name].display
+        eff = display_value(i.effective_value, identity_display) or "(unresolved)"
         typer.echo(f"  {i.name:<12} {eff}  [{i.source}]")
     typer.echo("derived:")
     for d in state.derived:
-        cur = d.current_value or "(missing)"
+        derived_display = state.effective_config.derived_variables[
+            d.variable_name
+        ].display
+        cur = display_value(d.current_value, derived_display) or "(missing)"
         typer.echo(f"  {d.variable_name:<24} {cur}  [{d.status}]")
     typer.echo("services:")
     for s in state.services:

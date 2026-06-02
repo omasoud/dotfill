@@ -94,7 +94,7 @@ metadata:
 
 - `display = "plain"` shows the value in local CLI/API/UI output.
 - `display = "masked"` shows only a masked representation in local CLI/API/UI
-  output; raw masked values must not be included in those responses.
+  output; raw values for masked items must not be included in those responses.
 - `compare = "exact"` compares values with exact string equality.
 - `compare = "casefold"` compares values using Python `str.casefold()` for
   equality decisions.
