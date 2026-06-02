@@ -56,6 +56,27 @@ def run_dotfill(
 
     Wrapper packages can either supply an explicit ``config_dir`` containing
     TOML files, or supply a normal config root/profile/default-profile policy.
+
+    Args:
+        config_dir: Final directory containing ``config_common.toml`` and
+            ``config.toml``. This direct mode cannot be combined with
+            ``config_root``, ``profile``, or ``default_profile``.
+        config_root: Root directory for dotfill configuration. When omitted,
+            resolution uses ``DOTFILL_CONFIG_ROOT`` and then the platform
+            default config directory.
+        profile: Explicit profile name under ``config_root / "profiles"``.
+            This overrides ``DOTFILL_PROFILE`` and ``default_profile``.
+        default_profile: Wrapper-provided fallback profile name. It is used
+            only when neither CLI input, ``profile``, nor ``DOTFILL_PROFILE``
+            selects a profile.
+        env_path: Path to the target ``.env`` file. This is passed to the CLI
+            as the entrypoint default and can still be overridden by
+            ``--env-path`` in ``argv``.
+        argv: Command-line arguments to pass to dotfill, excluding the program
+            name. ``None`` reads arguments from the active process.
+        program_name: Program name shown in CLI help and error output.
+        before_config_load: Optional hook called with the resolved
+            ``ConfigContext`` after path resolution and before TOML loading.
     """
     if config_dir is not None and (
         config_root is not None or profile is not None or default_profile is not None
