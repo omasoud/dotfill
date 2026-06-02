@@ -79,6 +79,61 @@ Focused verification areas:
 - [x] Build artifact inspection includes static assets such as `app.js`, `app.css`, and helper modules.
 
 
+## Planned Implementation: Locked Wrapper Profiles
+
+Goal: let wrappers enforce one profile through the stable entrypoint.
+
+- [ ] Add `locked_profile: str | None = None` to `run_dotfill(...)`.
+- [ ] Validate entrypoint combinations: `locked_profile` cannot be combined with
+      `config_dir`, `profile`, or `default_profile`.
+- [ ] Preserve valid wrapper inputs with locked profiles: `config_root`,
+      `env_path`, `argv`, `program_name`, and `before_config_load`.
+- [ ] Enforce locked profile resolution in the CLI callback so the resolved
+      `ConfigContext.profile` is always the locked profile.
+- [ ] Accept redundant CLI `--profile <locked>` and reject CLI
+      `--profile <other>` with a clean CLI error.
+- [ ] Accept absent `DOTFILL_PROFILE` and matching `DOTFILL_PROFILE=<locked>`;
+      reject non-matching `DOTFILL_PROFILE`.
+- [ ] Keep `--config-root` precedence working with locked profiles.
+- [ ] Add focused tests for valid locked-profile context resolution, invalid
+      entrypoint combinations, CLI profile mismatch, environment profile
+      mismatch, redundant matching profile input, `--config-root`, and
+      `before_config_load` timing.
+- [ ] Update public README and user docs for wrapper authors after the API is
+      implemented.
+
+## Planned Implementation: Identity and Derived Display/Compare Metadata
+
+Goal: allow generic TOML config to control presentation and equality semantics
+for identity-like values without changing service-token secrecy rules.
+
+- [ ] Add config model fields for identity and derived metadata:
+      `display = "plain" | "masked"` and
+      `compare = "exact" | "casefold"`.
+- [ ] Validate the new fields in strict TOML schema loading, with defaults
+      `display = "plain"` and `compare = "exact"`.
+- [ ] Add shared helpers for display masking and comparison equality.
+- [ ] Apply identity `compare` when resolving explicit `.env` identity values
+      against detected values.
+- [ ] Apply derived `compare` when computing derived `aligned`/`diverged`
+      status.
+- [ ] Apply derived `compare` to import scan and commit no-change detection for
+      derived targets.
+- [ ] Keep service token display and comparison behavior unchanged: always
+      masked, always exact.
+- [ ] Ensure comparison metadata never normalizes or rewrites stored values by
+      itself.
+- [ ] Apply identity/derived `display` to API responses, CLI `status`, and
+      dashboard rendering so masked items do not expose raw values.
+- [ ] Keep import scan source previews masked regardless of target display
+      metadata.
+- [ ] Add focused tests for schema validation/defaults, identity casefold
+      alignment, derived casefold alignment, derived import no-change behavior,
+      masked identity/derived API payloads, masked CLI status output, and
+      unchanged service-token behavior.
+- [ ] Update `docs/config-schema.md`, getting-started/troubleshooting examples
+      as needed, and README references after implementation.
+
 
 ## Future Roadmap
 

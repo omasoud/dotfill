@@ -64,13 +64,19 @@ Config root precedence:
 2. `DOTFILL_CONFIG_ROOT`.
 3. `platformdirs.user_config_dir("dotfill", appauthor=False, roaming=True)`.
 
-Profile precedence:
+Normal profile precedence:
 
 1. CLI or entrypoint profile.
 2. `DOTFILL_PROFILE`.
 3. no profile.
 
 When a wrapper passes `default_profile`, it is used only if neither CLI/profile input nor `DOTFILL_PROFILE` supplies a profile.
+
+When a wrapper passes `locked_profile`, the active profile is always that
+profile. CLI `--profile` and `DOTFILL_PROFILE` are accepted only when they
+match the locked profile; non-matching profile input is rejected before TOML
+loading. `locked_profile` cannot be combined with `config_dir`, `profile`, or
+`default_profile`.
 
 The final config directory is the config root, or `config_root / "profiles" / profile` when a profile is active. Direct `config_dir` entrypoint mode uses the supplied directory as final.
 
@@ -91,6 +97,19 @@ The merge is deterministic:
 
 Validation happens after merge and disable semantics.
 
+Identity and derived-variable definitions support optional metadata:
+
+- `display = "plain" | "masked"`, default `plain`;
+- `compare = "exact" | "casefold"`, default `exact`.
+
+`display` controls local CLI/API/UI presentation only. `compare` controls
+equality decisions only. Neither option transforms stored values or forces
+case normalization on write.
+
+Service token values are always masked in user-facing output and always compare
+exactly. Service definitions do not expose configurable display or comparison
+metadata.
+
 ## Domain Models
 
 Config models live in `config_models.py`:
@@ -102,6 +121,9 @@ Config models live in `config_models.py`:
 - `ServiceDefinition`
 - `ImportAliasDefinition`
 - `EffectiveConfig`
+
+`IdentityDefinition` and `DerivedVariableDefinition` carry display and compare
+metadata.
 
 Runtime/API models live in `models.py`:
 
@@ -127,8 +149,9 @@ Runtime/API models live in `models.py`:
 5. Reject duplicate managed variables.
 6. Run Windows AD detection only when an enabled identity source needs AD facts.
 7. Evaluate identity rules.
-8. Resolve explicit `.env` identity overrides against detected values.
-9. Build derived variable states.
+8. Resolve explicit `.env` identity overrides against detected values using
+   each identity's comparison mode.
+9. Build derived variable states using each derived variable's comparison mode.
 10. Resolve service token/test URLs.
 11. Apply cached test status only when the service-test fingerprint matches.
 
@@ -162,7 +185,20 @@ Identity state source values are:
 - `diverged`
 - `unresolved`
 
+Identity aligned/diverged decisions use the configured identity comparison mode.
+When values are equivalent under `casefold`, the state is `aligned` and the
+explicit value remains the effective value.
+
 dotfill reads configured identity variables as explicit overrides but never writes identity variables automatically.
+
+## Derived Variable Design
+
+Derived variables copy effective identity values into configured `.env`
+variables only as part of explicit token-save flows.
+
+Derived aligned/diverged decisions use the configured derived comparison mode.
+When values are equivalent under `casefold`, the state is `aligned`; dotfill
+does not rewrite a non-empty current value just to normalize casing.
 
 ## `.env` Document Design
 
@@ -182,6 +218,10 @@ Scan targets are enabled service token variables plus enabled derived variable n
 Raw source values live only in backend `ImportScanSession.candidates` as `SecretStr`. API scan responses include masked values only.
 
 Commit uses scan ID plus source/target choices. It rejects duplicate selected targets, validates targets against current effective config, recomputes latest status against current `.env`, skips no-change rows, writes only changed rows, and invalidates cached service test status for changed service token variables.
+
+No-change detection for service token targets is always exact. No-change
+detection for derived targets uses the derived variable's comparison mode. Scan
+previews keep masking source values regardless of target display metadata.
 
 ## Service Test Design
 
@@ -221,12 +261,18 @@ from dotfill.entrypoints import resolve_config_context, run_dotfill
 - `config_root`
 - `profile`
 - `default_profile`
+- `locked_profile`
 - `env_path`
 - `argv`
 - `program_name`
 - `before_config_load`
 
-`config_dir` cannot be combined with root/profile/default-profile input. `before_config_load` runs after context resolution and before TOML loading.
+`profile` is a programmatic explicit profile. `default_profile` is a fallback
+used only when CLI input and `DOTFILL_PROFILE` do not select a profile.
+`locked_profile` is a wrapper-enforced profile: CLI/environment profile input
+must either be absent or match it.
+
+`config_dir` cannot be combined with `config_root`, `profile`, `default_profile`, or `locked_profile`. `locked_profile` cannot be combined with `profile` or `default_profile`. `before_config_load` runs after context resolution and before TOML loading.
 
 ## Server and API Design
 
@@ -280,7 +326,10 @@ Never expose:
 - dropped source contents;
 - full `.env` contents.
 
-Masked token values and masked import previews are allowed.
+Masked token values, masked import previews, and configured masked
+identity/derived values are allowed. When an identity or derived variable is
+configured with `display = "masked"`, raw values for that item must not be
+included in API responses or CLI/status output.
 
 ## Verification
 

@@ -11,6 +11,8 @@ dotfill is a generic local-only utility for maintaining configured token and ide
 - Ship generic `dotfill` with no company-specific services, domains, identities, token names, import aliases, or defaults.
 - Load `config_common.toml` and `config.toml` from a resolved config directory.
 - Support config roots, profiles, and wrapper-style Python entrypoints.
+- Support wrapper entrypoints that lock a wrapper to one profile without
+  wrapper-side command-line parsing.
 - Preserve `.env` comments, blank lines, ordering, unrelated variables, unrelated duplicates, and line endings.
 - Write only after explicit user action.
 - Create at most one backup per process session before the first write.
@@ -87,6 +89,25 @@ Supported sections:
 
 All keyed items support `enabled = false`, which removes the inherited item from the effective config.
 
+Identity and derived-variable definitions may include display/comparison
+metadata:
+
+- `display = "plain"` shows the value in local CLI/API/UI output.
+- `display = "masked"` shows only a masked representation in local CLI/API/UI
+  output; raw masked values must not be included in those responses.
+- `compare = "exact"` compares values with exact string equality.
+- `compare = "casefold"` compares values using Python `str.casefold()` for
+  equality decisions.
+
+Identity and derived-variable `display` default to `plain`. Identity and
+derived-variable `compare` default to `exact`. Display metadata does not change
+state construction, save behavior, import mapping, or stored values. Comparison
+metadata does not normalize values before writing.
+
+Service token values are always masked in user-facing output and always compare
+exactly; service definitions do not support configurable `display` or `compare`
+metadata.
+
 ## Identity Requirements
 
 Identity names are dynamic TOML keys and must be valid environment variable names.
@@ -110,6 +131,11 @@ Resolution model:
 - Detected value with no explicit value is `detected`.
 - Missing explicit and detected values are `unresolved`.
 
+Identity equality uses the identity definition's `compare` mode. With
+`compare = "casefold"`, explicit and detected values that differ only by
+casefold-equivalent casing are `aligned`; the effective value remains the
+original explicit value.
+
 Unresolved identities fail state construction only when required by enabled derived variables, service URL templates, or dependent identity rules.
 
 dotfill never writes identity variables automatically.
@@ -124,6 +150,12 @@ Rules:
 - Missing or empty enabled derived variables are filled on token saves.
 - Existing non-empty derived values are preserved.
 - Disabled derived variables are not filled or written.
+
+Derived equality uses the derived definition's `compare` mode. With
+`compare = "casefold"`, current and computed values that differ only by
+casefold-equivalent casing are `aligned`. Token saves still preserve any
+non-empty current derived value, and dotfill does not rewrite a value only to
+normalize casing.
 
 ## Service Requirements
 
@@ -171,6 +203,11 @@ Commit behavior:
 - Latest no-change rows are skipped.
 - Changed service token variables invalidate cached test status.
 
+No-change detection for derived-variable import targets uses that derived
+definition's `compare` mode. No-change detection for service token targets is
+always exact. Import scan previews continue to mask source values regardless of
+target display metadata.
+
 ## CLI Requirements
 
 Required commands and options:
@@ -194,6 +231,31 @@ dotfill --verbose
 - `--user`
 
 `config open` creates the final config directory but does not create TOML files.
+
+## Wrapper Entrypoint Requirements
+
+`run_dotfill(...)` must support three profile modes:
+
+- `profile="name"` selects a programmatic explicit profile in the normal
+  explicit-profile precedence tier. CLI `--profile` can override it;
+  `DOTFILL_PROFILE` is used only when neither CLI nor entrypoint profile input
+  selects a profile.
+- `default_profile="name"` selects a fallback profile only when CLI input and
+  `DOTFILL_PROFILE` do not select one.
+- `locked_profile="name"` forces a wrapper-owned profile.
+
+When `locked_profile` is set:
+
+- `config_root`, `env_path`, `argv`, `program_name`, and `before_config_load`
+  continue to work normally.
+- `config_dir`, `profile`, and `default_profile` are invalid combinations.
+- CLI `--profile name` is accepted only when it matches the locked profile.
+- CLI `--profile other` is rejected with a clear non-secret CLI error.
+- `DOTFILL_PROFILE=name` is accepted only when it matches the locked profile.
+- `DOTFILL_PROFILE=other` is rejected with a clear non-secret CLI error.
+- The resolved `ConfigContext.profile` is always the locked profile.
+- `before_config_load` runs after locked-profile context resolution and before
+  TOML loading.
 
 ## API and Server Requirements
 
@@ -228,7 +290,7 @@ Run a profile wrapper or edit config.toml.
 ## Documentation Requirements
 
 - README describes generic TOML configuration, config locations, CLI usage, privacy, wrapper entrypoints, and links to user documentation under `docs/`.
-- User-facing `docs/config-schema.md` documents schema, merge rules, disable semantics, identity sources, import aliases, and `tls_verify`.
+- User-facing `docs/config-schema.md` documents schema, merge rules, disable semantics, identity sources, identity/derived `display` and `compare`, import aliases, and `tls_verify`.
 - User-facing docs include getting-started and troubleshooting guidance.
 - Examples use neutral domains such as `example.com`.
 - Override-only `config.toml` examples include `version = 1`.
