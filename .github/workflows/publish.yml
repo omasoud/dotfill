@@ -1,0 +1,52 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Run tests
+        run: uv run --locked pytest
+
+      - name: Check release tag matches package version
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import tomllib
+
+          data = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          version = data["project"]["version"]
+          tag = os.environ["GITHUB_REF_NAME"]
+          normalized = tag[1:] if tag.startswith("v") else tag
+          if normalized != version:
+              raise SystemExit(
+                  f"Release tag {tag!r} does not match project version {version!r}"
+              )
+          PY
+
+      - name: Build
+        run: |
+          rm -rf dist
+          uv build
+
+      - name: Publish
+        run: uv publish

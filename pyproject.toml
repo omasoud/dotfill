@@ -6,7 +6,23 @@ readme = "README.md"
 authors = [
     { name = "Osama Masoud", email = "osama.masoud@gmail.com"}
 ]
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.14"
+keywords = ["api-tokens", "dotenv", "env", "local-first", "secrets"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Utilities",
+]
 dependencies = [
     "typer>=0.12",
     "fastapi>=0.115",
@@ -19,6 +35,12 @@ dependencies = [
 
 [project.scripts]
 dotfill = "dotfill.entrypoints:main"
+
+[project.urls]
+Homepage = "https://github.com/omasoud/dotfill"
+Repository = "https://github.com/omasoud/dotfill"
+Documentation = "https://github.com/omasoud/dotfill/tree/main/docs"
+Issues = "https://github.com/omasoud/dotfill/issues"
 
 [build-system]
 requires = ["uv_build>=0.11.7,<0.12.0"]

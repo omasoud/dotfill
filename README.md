@@ -4,23 +4,49 @@ dotfill is a local-only helper for maintaining token and identity variables in a
 
 Generic `dotfill` ships with no services, identities, domains, token names, or import aliases. A user config or a wrapper package supplies those definitions.
 
+## Installation
+
+For CLI use, install dotfill as an isolated tool:
+
+```powershell
+uv tool install dotfill
+```
+
+or:
+
+```powershell
+pipx install dotfill
+```
+
+For use as a library or project dependency:
+
+```powershell
+uv add dotfill
+```
+
+or:
+
+```powershell
+pip install dotfill
+```
+
+dotfill requires Python 3.14 or newer.
+
 ## Quick Start
 
 ```powershell
-uv run dotfill status
-uv run dotfill
-uv run dotfill config path
-uv run dotfill config open
+dotfill status
+dotfill
+dotfill config path
+dotfill config open
 ```
 
 Useful options:
 
 ```powershell
-uv run dotfill --config-root C:\tmp\dotfill-config --profile demo status
-uv run dotfill --env-path C:\work\project\.env
+dotfill --config-root C:\tmp\dotfill-config --profile demo status
+dotfill --env-path C:\work\project\.env
 ```
-
-If the virtual environment is activated, `dotfill --help` works directly. Without activation, use `uv run dotfill ...` or `.\.venv\Scripts\dotfill.exe ...`.
 
 ## Documentation
 
@@ -129,3 +155,16 @@ raise SystemExit(
 ```
 
 Wrappers should not import the Typer app directly. User overrides remain in `config.toml`.
+
+## Development
+
+From a source checkout:
+
+```powershell
+uv sync
+uv run pytest
+uv run dotfill status
+uv build
+```
+
+If the virtual environment is activated, `dotfill --help` works directly. Without activation, use `uv run dotfill ...` or `.\.venv\Scripts\dotfill.exe ...`.
