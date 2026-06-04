@@ -150,3 +150,12 @@ class CommitImportRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     scanId: str
     mappings: list[ImportMappingChoice]
+
+
+class ImportTestRequest(BaseModel):
+    """Body of POST /api/import/test. Must NOT contain raw source values."""
+
+    model_config = ConfigDict(extra="forbid")
+    scanId: str
+    sourceKey: str
+    targetKey: str

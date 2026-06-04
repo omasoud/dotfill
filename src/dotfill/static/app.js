@@ -1,5 +1,6 @@
 // dotfill local web UI - vanilla ES module
-// No persistent storage; session token lives only in this module scope.
+// Only the non-secret theme preference is persisted; the session token stays
+// in this module scope.
 
 import {
   browseImportSource,
@@ -10,10 +11,25 @@ import {
   importSourceRequest,
   pathImportSource,
 } from "./import_source_state.js";
+import {
+  canTestImportRow,
+  clearImportTestState,
+  importTestRequest,
+  importTestStatus,
+  resetImportTestStates,
+  setImportTestState,
+} from "./import_test_state.js";
+import {
+  applyTheme,
+  nextTheme,
+  resolveInitialTheme,
+  storeTheme,
+} from "./theme_state.js";
 
 let sessionToken = null;
 let state = null;
 let appVersion = "";
+let activeTheme = applyTheme(resolveInitialTheme());
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -293,6 +309,27 @@ function renderConfigDisclosure(configDir) {
   );
 }
 
+function setTheme(theme) {
+  activeTheme = applyTheme(theme);
+  storeTheme(activeTheme);
+  render();
+}
+
+function renderThemeToggle() {
+  const targetTheme = nextTheme(activeTheme);
+  const label = targetTheme === "dark" ? "Switch to dark mode" : "Switch to light mode";
+  return el(
+    "button",
+    {
+      class: "theme-toggle",
+      onClick: () => setTheme(targetTheme),
+      title: label,
+      "aria-label": label,
+    },
+    icon(activeTheme === "dark" ? "sun" : "moon")
+  );
+}
+
 function render() {
   const root = $("#root");
   root.innerHTML = "";
@@ -321,6 +358,7 @@ function render() {
     el(
       "div",
       { class: "df-header-actions" },
+      renderThemeToggle(),
       el(
         "button",
         { onClick: testAll, disabled: !state.services.length },
@@ -526,10 +564,12 @@ function openImportWizard() {
   const tableHost = el("div", {});
   let currentScan = null;
   let activeSource = createImportSourceState();
+  let importTestStates = resetImportTestStates();
 
   pathInput.addEventListener("input", () => {
     activeSource = editImportSource(activeSource, pathInput.value);
     currentScan = null;
+    importTestStates = resetImportTestStates();
     renderTable();
   });
 
@@ -539,12 +579,15 @@ function openImportWizard() {
     const content = await file.text();
     activeSource = browseImportSource(activeSource, file.name, content);
     pathInput.value = activeSource.displayValue;
+    importTestStates = resetImportTestStates();
     await loadScanFromActiveSource();
     fileInput.value = "";
   });
 
   async function loadScanFromActiveSource() {
     showError("");
+    importTestStates = resetImportTestStates();
+    renderTable();
     if (activeSource.mode === "path") {
       activeSource = pathImportSource(pathInput.value);
     }
@@ -599,6 +642,69 @@ function openImportWizard() {
     return `${prefix}Found ${rows.length} candidate variables · ${willChange} will change, ${noChange} already matches, ${unmapped} unmapped`;
   }
 
+  function importTestCell(row) {
+    if (!canTestImportRow(row, state.services)) {
+      return el("td", { class: "import-test-cell" }, "");
+    }
+    const rowStatus = importTestStatus(importTestStates, row);
+    const children = rowStatus === "working"
+      ? [icon("check")]
+      : rowStatus === "failed"
+        ? [icon("x")]
+        : [rowStatus === "testing" ? "..." : "?"];
+    const title = rowStatus === "untested"
+      ? "Test this service using the imported API key"
+      : rowStatus === "testing"
+        ? "Testing imported API key"
+        : rowStatus === "working"
+          ? "Test passed"
+          : "Test failed";
+    return el(
+      "td",
+      { class: "import-test-cell" },
+      el(
+        "button",
+        {
+          class: `import-test-btn import-test-${rowStatus}`,
+          disabled: rowStatus === "testing",
+          title,
+          "aria-label": title,
+          onClick: () => testImportRow(row),
+        },
+        ...children
+      )
+    );
+  }
+
+  async function testImportRow(row) {
+    if (!currentScan || !canTestImportRow(row, state.services)) return;
+    const scanId = currentScan.scan_id;
+    const sourceKey = row.source_key;
+    const targetKey = row.target_key;
+    const request = importTestRequest(currentScan, row);
+    showError("");
+    importTestStates = setImportTestState(importTestStates, sourceKey, "testing");
+    renderTable();
+    try {
+      const result = await api("POST", request.path, request.body);
+      if (!currentScan || currentScan.scan_id !== scanId) return;
+      const latestRow = currentScan.rows.find((r) => r.source_key === sourceKey);
+      if (!latestRow || latestRow.target_key !== targetKey) return;
+      importTestStates = setImportTestState(
+        importTestStates,
+        sourceKey,
+        result.status === "working" ? "working" : "failed"
+      );
+      renderTable();
+    } catch (e) {
+      if (currentScan && currentScan.scan_id === scanId) {
+        importTestStates = setImportTestState(importTestStates, sourceKey, "failed");
+        renderTable();
+      }
+      showError(`Import test failed: ${e.message}`);
+    }
+  }
+
   function renderTable() {
     tableHost.innerHTML = "";
     if (!currentScan) {
@@ -618,6 +724,7 @@ function openImportWizard() {
         onChange: (e) => {
           currentScan.rows[idx].target_key = e.target.value || null;
           recomputeStatus(currentScan.rows[idx]);
+          importTestStates = clearImportTestState(importTestStates, r.source_key);
           renderTable();
         },
       }, ...targetOptions(r));
@@ -631,6 +738,7 @@ function openImportWizard() {
         el("td", { class: "mono" }, r.source_key),
         el("td", { class: "mono" }, r.masked_source_value || ""),
         el("td", {}, select),
+        importTestCell(r),
         el("td", {}, statusBadge)
       );
     });
@@ -646,6 +754,7 @@ function openImportWizard() {
           el("th", {}, "Found in source"),
           el("th", {}, "Value"),
           el("th", {}, "Save as"),
+          el("th", { class: "import-test-header", "aria-label": "Test imported service" }, ""),
           el("th", {}, "Status")
         )
       ),
@@ -697,6 +806,7 @@ function openImportWizard() {
     const content = await file.text();
     activeSource = dropImportSource(activeSource, file.name, content);
     pathInput.value = activeSource.displayValue;
+    importTestStates = resetImportTestStates();
     await loadScanFromActiveSource();
   });
 

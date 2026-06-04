@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from dotfill.api import SESSION_HEADER, AppContext, create_app
 from dotfill.config_paths import resolve_config_context
-from dotfill.models import SessionState
+from dotfill.models import SessionState, TestResult as DotfillTestResult
 
 
 @pytest.fixture()
@@ -108,6 +108,11 @@ def test_state_requires_session_header(client: TestClient) -> None:
         ("post", "/api/test-all", None),
         ("post", "/api/import/scan-path", {"path": "source.env"}),
         ("post", "/api/import/scan-dropped", {"filename": "x.env", "content": "A=1\n"}),
+        (
+            "post",
+            "/api/import/test",
+            {"scanId": "missing", "sourceKey": "A", "targetKey": "SERVICE_A_TOKEN"},
+        ),
         ("post", "/api/import/commit", {"scanId": "missing", "mappings": []}),
     ],
 )
@@ -327,6 +332,134 @@ def test_test_all_skips_services_without_tokens(
     assert len(results) == 1
     assert results[0]["service_id"] == "SERVICE_A"
     assert results[0]["status"] == "working"
+
+
+@respx.mock
+def test_import_test_uses_scan_candidate_without_saving_or_caching(
+    client: TestClient, ctx: AppContext, env_path: Path
+) -> None:
+    ctx.session.test_results["SERVICE_A"] = DotfillTestResult(
+        status="failed",
+        http_status=401,
+        error_message="Authentication failed",
+    )
+    route = respx.get("https://service-a.example.com/api/v1/me").mock(
+        return_value=httpx.Response(200)
+    )
+    r = client.post(
+        "/api/import/scan-dropped",
+        headers=_headers(ctx),
+        json={"filename": "src.env", "content": "SERVICE_A_TOKEN=imported-token\n"},
+    )
+    scan_id = r.json()["scan_id"]
+
+    r2 = client.post(
+        "/api/import/test",
+        headers=_headers(ctx),
+        json={
+            "scanId": scan_id,
+            "sourceKey": "SERVICE_A_TOKEN",
+            "targetKey": "SERVICE_A_TOKEN",
+        },
+    )
+
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["service_id"] == "SERVICE_A"
+    assert r2.json()["status"] == "working"
+    assert route.called
+    assert route.calls[0].request.headers["Authorization"] == "Bearer imported-token"
+    assert env_path.read_text(encoding="utf-8") == ""
+    assert ctx.session.backup_created is False
+    assert ctx.session.test_results["SERVICE_A"].status == "failed"
+    assert "SERVICE_A_TOKEN" in ctx.session.import_scans[scan_id].candidates
+
+
+@respx.mock
+def test_import_test_reports_failed_candidate_without_saved_cache_mutation(
+    client: TestClient, ctx: AppContext
+) -> None:
+    ctx.session.test_results["SERVICE_A"] = DotfillTestResult(
+        status="working",
+        http_status=200,
+    )
+    respx.get("https://service-a.example.com/api/v1/me").mock(
+        return_value=httpx.Response(403)
+    )
+    r = client.post(
+        "/api/import/scan-dropped",
+        headers=_headers(ctx),
+        json={"filename": "src.env", "content": "SERVICE_A_TOKEN=bad-token\n"},
+    )
+    scan_id = r.json()["scan_id"]
+
+    r2 = client.post(
+        "/api/import/test",
+        headers=_headers(ctx),
+        json={
+            "scanId": scan_id,
+            "sourceKey": "SERVICE_A_TOKEN",
+            "targetKey": "SERVICE_A_TOKEN",
+        },
+    )
+
+    assert r2.status_code == 200, r2.text
+    body = r2.json()
+    assert body["service_id"] == "SERVICE_A"
+    assert body["status"] == "failed"
+    assert body["http_status"] == 403
+    assert body["error_message"] == "Authentication failed"
+    assert ctx.session.test_results["SERVICE_A"].status == "working"
+
+
+def test_import_test_rejects_unknown_scan(client: TestClient, ctx: AppContext) -> None:
+    r = client.post(
+        "/api/import/test",
+        headers=_headers(ctx),
+        json={
+            "scanId": "missing",
+            "sourceKey": "SERVICE_A_TOKEN",
+            "targetKey": "SERVICE_A_TOKEN",
+        },
+    )
+
+    assert r.status_code == 404
+    assert r.json()["detail"] == "Unknown scan_id"
+
+
+@pytest.mark.parametrize(
+    ("source_key", "target_key", "message"),
+    [
+        ("MISSING_SOURCE", "SERVICE_A_TOKEN", "Unknown source key in scan"),
+        ("SERVICE_A_TOKEN", "WORK_USERNAME", "Import target is not a service token"),
+        ("SERVICE_A_TOKEN", "UNKNOWN_TOKEN", "Import target is not a service token"),
+    ],
+)
+def test_import_test_rejects_invalid_source_or_target(
+    client: TestClient,
+    ctx: AppContext,
+    source_key: str,
+    target_key: str,
+    message: str,
+) -> None:
+    r = client.post(
+        "/api/import/scan-dropped",
+        headers=_headers(ctx),
+        json={"filename": "src.env", "content": "SERVICE_A_TOKEN=imported-token\n"},
+    )
+    scan_id = r.json()["scan_id"]
+
+    r2 = client.post(
+        "/api/import/test",
+        headers=_headers(ctx),
+        json={
+            "scanId": scan_id,
+            "sourceKey": source_key,
+            "targetKey": target_key,
+        },
+    )
+
+    assert r2.status_code == 400
+    assert r2.json()["detail"] == message
 
 
 def test_import_scan_and_commit_flow(
@@ -614,9 +747,10 @@ def test_import_commit_invalidates_test_result(
     client: TestClient, ctx: AppContext, env_path: Path
 ) -> None:
     env_path.write_text("SERVICE_A_TOKEN=oldtoken\n", encoding="utf-8")
-    from dotfill.models import TestResult
-
-    ctx.session.test_results["SERVICE_A"] = TestResult(status="working", http_status=200)
+    ctx.session.test_results["SERVICE_A"] = DotfillTestResult(
+        status="working",
+        http_status=200,
+    )
 
     r = client.post(
         "/api/import/scan-dropped",

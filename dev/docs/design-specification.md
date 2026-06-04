@@ -223,6 +223,18 @@ No-change detection for service token targets is always exact. No-change
 detection for derived targets uses the derived variable's comparison mode. Scan
 previews keep masking source values regardless of target display metadata.
 
+Import-row service testing uses a dedicated import-test endpoint rather than
+the saved-token `/api/test/{service_id}` endpoint. The request contains the
+scan ID, source key, and currently selected target key. The server validates
+that the scan exists, the source key exists in `ImportScanSession.candidates`,
+and the selected target key belongs to an enabled service token variable. It
+then resolves that service's test URL, runs the normal service-test logic with
+the backend-held candidate value, and returns only non-secret status/error
+details. This flow never writes the target `.env` and never updates the
+dashboard saved-token service-test cache. The frontend uses the result to
+choose the row icon state; detailed success/failure context stays in the
+normal service-test logger/console path rather than row tooltips.
+
 ## Service Test Design
 
 Only bearer auth is implemented.
@@ -244,6 +256,11 @@ Status classification:
 - transport errors -> `failed`
 
 Logs include service ID and non-secret status/error context only.
+The dashboard presents service-test outcomes as status badges and request-level
+errors, not detailed per-service diagnostics. Those diagnostics belong in the
+configured logger/console. `--verbose` enables debug-level logging and stops
+suppressing supporting Uvicorn/httpx/httpcore logs; all modes must remain
+secret-safe.
 
 ## CLI and Entry Points
 
@@ -295,18 +312,26 @@ Module memory holds:
 - pasted token values while the wizard is open;
 - dropped file content only long enough to POST it.
 
-No `localStorage`, `sessionStorage`, IndexedDB, or cookies are used.
+`localStorage` may store only the persisted light/dark color-theme preference.
+No token values, import source contents, Authorization headers, full `.env`
+contents, session tokens, or other secret material may be written to
+`localStorage`, `sessionStorage`, IndexedDB, or cookies.
 
 The dashboard shows:
 
 - package version;
 - target `.env`;
 - collapsed `dotfill config` disclosure with final config/profile directory and open-folder action;
+- light/dark mode toggle;
 - dynamic identities;
 - dynamic derived variables;
 - dynamic services;
 - empty service state;
 - session backup status.
+
+The selected color theme is applied on startup before rendering app content
+where practical. The theme preference persists across browser sessions and may
+fall back to the system `prefers-color-scheme` value when no preference exists.
 
 The import wizard builds target dropdowns from dynamic service and derived state. It tracks source mode separately from source text:
 
@@ -314,6 +339,21 @@ The import wizard builds target dropdowns from dynamic service and derived state
 - browsed files display `Selected file: <filename>` and rescan cached browser-provided file content;
 - dropped files display `Dropped file: <filename>` and rescan cached browser-provided file content;
 - manual edits to the source field switch back to typed-path mode.
+
+The import mapping table includes a narrow action column immediately before
+`Status`. Rows whose `Save as` selection resolves to an enabled service token
+variable and whose status is not `No change` show an approximately
+checkbox-sized service-test button in that column. The untested state displays
+`?` with a tooltip explaining that the selected service will be tested using
+the imported API key. While running, the row shows an in-progress state; on
+success it becomes a green check, and on failure it becomes a red x. Detailed
+success/failure context is not shown in the row tooltip or status text; it is
+reported through the same logger/console path as saved-token service tests,
+with additional logging context available under `--verbose`. The button is hidden for
+skipped/unmapped rows, derived-variable targets, non-service targets, and
+no-change rows. Changing a row's `Save as` selection resets that row's test
+state. Pressing Scan, typing a new path, browsing to a new file, or dropping a
+new file resets all import row test states.
 
 ## Error and Secret Boundaries
 
@@ -325,6 +365,7 @@ Never expose:
 - Authorization headers;
 - dropped source contents;
 - full `.env` contents.
+- session tokens in browser storage.
 
 Masked token values, masked import previews, and configured masked
 identity/derived values are allowed. When an identity or derived variable is
@@ -343,7 +384,7 @@ Core verification is pytest-based:
 - service tests and secret-safe logging;
 - API auth, origin checks, and secret boundaries;
 - CLI and stable entrypoint behavior;
-- static frontend storage and generic-string audits.
+- static frontend secret-storage and generic-string audits.
 
 Packaging verification uses:
 

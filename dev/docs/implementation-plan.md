@@ -43,6 +43,8 @@ This document records the current implementation state, verification expectation
 - [x] Browse mode displays `Selected file: <filename>` and rescans cached file content.
 - [x] Drop mode displays `Dropped file: <filename>` and rescans cached file content.
 - [x] Manual edits to the import source field switch back to typed-path mode.
+- [x] Import wizard can test unsaved scan candidate values for service-token rows without saving or mutating the dashboard service-test cache.
+- [x] Import row test buttons render immediately before `Status`, use icon-only row status, and reset on target/source changes.
 - [x] CLI supports default launch, `serve`, `status`, `config path`, `config open`, `--config-root`, `--profile`, `--env-path`, and `--verbose`.
 - [x] Stable wrapper-facing entrypoints are exposed through `dotfill.entrypoints`.
 - [x] `run_dotfill(...) -> int` supports `config_dir`, `config_root`, `profile`, `default_profile`, `locked_profile`, `env_path`, `argv`, `program_name`, and `before_config_load`.
@@ -50,8 +52,10 @@ This document records the current implementation state, verification expectation
 - [x] Local server binds to `127.0.0.1`; `/api/bootstrap` is public and all other API endpoints require `X-Dotfill-Session`.
 - [x] Mutating API endpoints reject unexpected non-local `Origin` headers and emit no permissive CORS headers.
 - [x] Domain errors map to non-secret JSON responses.
-- [x] Static frontend uses no browser storage and keeps token/import input in memory only.
+- [x] Static frontend uses no browser storage for secrets and keeps token/import input in memory only.
+- [x] Static frontend persists only the non-secret `dotfill.theme` color-theme preference.
 - [x] Dashboard shows target `.env` path as the primary path and config directory inside a collapsed `dotfill config` disclosure.
+- [x] Dashboard includes a persisted light/dark mode toggle.
 - [x] Dashboard supports empty generic state when no services, identities, or derived variables are configured.
 
 ## Verification Matrix
@@ -74,10 +78,12 @@ Focused verification areas:
 - [x] `.env` parser/writer preservation and duplicate managed-variable handling.
 - [x] Save and backup behavior.
 - [x] Import scan and commit behavior, including no raw source values in responses.
+- [x] Import-row service testing with backend-held candidate values and no saved-token cache mutation.
 - [x] Bearer service test behavior and secret-safe logging.
 - [x] API session protection, origin checks, CORS absence, and bootstrap behavior.
 - [x] CLI commands and stable entrypoint behavior.
-- [x] Frontend static checks for no browser storage and generic bundled assets.
+- [x] Frontend static checks for no secret browser storage and generic bundled assets.
+- [x] Frontend theme preference and import-test state helper behavior.
 - [x] Build artifact inspection includes static assets such as `app.js`, `app.css`, and helper modules.
 
 
@@ -137,6 +143,86 @@ for identity-like values without changing service-token secrecy rules.
       as needed, and README references after implementation.
 
 
+## Implemented: Persisted Light/Dark Theme
+
+Goal: let users switch between light and dark modes and keep the selected
+theme across browser sessions without relaxing the secret-storage boundary.
+
+- [x] Add a small theme module in the static frontend that resolves the active
+      theme from `localStorage`, then `prefers-color-scheme`, then a stable
+      default.
+- [x] Persist only a non-secret preference key such as `dotfill.theme`, with
+      allowed values `light` and `dark`.
+- [x] Handle unavailable or blocked browser storage gracefully by falling back
+      to session-only theme state.
+- [x] Apply the resolved theme to the document before main app rendering where
+      practical to avoid a visible theme flash.
+- [x] Add a compact light/dark toggle to the dashboard header with accessible
+      label/title text and a state that reflects the active theme.
+- [x] Add dark-theme CSS tokens for page, surfaces, borders, text, form
+      controls, buttons, badges, errors, dropzone, mapping table, and focus
+      outlines.
+- [x] Keep the UI readable in both themes, including disabled states and
+      status colors.
+- [x] Update static frontend storage checks to allow only the theme preference
+      storage path and continue rejecting secret/session/import persistence.
+- [x] Add focused frontend tests or static checks for theme resolution,
+      persistence key/value constraints, and toggle wiring.
+- [x] After implementation, update the current-status checklist to mark the
+      persisted light/dark mode as implemented.
+
+## Implemented: Import Row Service Tests
+
+Goal: allow users to test an imported service token before committing it,
+using the backend-held scan candidate value and without saving the value.
+
+- [x] Add an API request model for import-row service tests containing
+      `scanId`, `sourceKey`, and `targetKey`.
+- [x] Add a dedicated mutating endpoint such as `POST /api/import/test` behind
+      normal session and origin protection.
+- [x] Validate that the scan exists, the source key exists in
+      `ImportScanSession.candidates`, and the selected target key belongs to
+      an enabled service token variable.
+- [x] Reject skipped/unmapped targets, derived-variable targets, and unknown
+      service token variables with non-secret errors.
+- [x] Resolve the selected service's test URL using the current effective
+      identity values.
+- [x] Run `run_service_test` with the scan candidate's raw value from backend
+      session memory, never from the browser.
+- [x] Return only non-secret result fields: service ID, status, HTTP status,
+      and sanitized error message.
+- [x] Do not write the target `.env`, mutate `ImportScanSession`, create a
+      backup, or update `SessionState.test_results`.
+- [x] Add API tests for successful candidate testing, failed authentication,
+      unknown scan/source/target errors, derived-target rejection, and
+      unchanged saved-token cache behavior.
+- [x] Add frontend state for per-row import-test status: untested, testing,
+      working, and failed.
+- [x] Render a narrow action column immediately before `Status`.
+- [x] Show an approximately checkbox-sized `?` button only when the current
+      `Save as` value resolves to an enabled service token variable and the row
+      status is not `no_change`.
+- [x] Hide the button for skipped/unmapped rows, derived-variable targets,
+      non-service targets, and no-change rows.
+- [x] Add tooltip/title text explaining that the button tests the selected
+      service using the imported API key.
+- [x] On click, call the import-test endpoint with scan ID, source key, and
+      current target key; disable or show in-progress state while the request
+      is running.
+- [x] On success, show a green check; on failure, show a red x without
+      embedding detailed failure context in row tooltip or status text.
+- [x] Ensure detailed import-test success/failure context is reported through
+      the existing service-test logger/console path, with any extra diagnostic
+      context gated by normal `--verbose` logging behavior.
+- [x] Reset the row's test state when its `Save as` selection changes.
+- [x] Reset all import row test states when Scan is pressed, when the path
+      input changes, or when a file is browsed or dropped.
+- [x] Add focused frontend/static tests for eligibility, action-column wiring,
+      API payload shape, and reset behavior.
+- [x] Verify the import table remains compact and usable on narrow viewports.
+- [x] After implementation, update current-status and verification checklists
+      to mark import-row service testing as implemented.
+
 ## Future Roadmap
 
 - [ ] Add configurable non-bearer service-test auth modes.
@@ -153,5 +239,5 @@ for identity-like values without changing service-token secrecy rules.
 - Prefer changing behavior in the shared domain layer before adding API/UI-only logic.
 - Keep wrapper packages outside the generic package. They should call stable entrypoints and provide config, not import internal CLI objects.
 - Treat raw tokens, dropped import contents, Authorization headers, and full `.env` contents as secret material.
-- Keep browser state transient; no `localStorage`, `sessionStorage`, IndexedDB, or cookies.
+- Keep browser state transient except explicitly allowed non-secret UI preferences; never store secrets, session tokens, import contents, or full `.env` contents in `localStorage`, `sessionStorage`, IndexedDB, or cookies.
 - Keep generated build artifacts out of commits unless explicitly preparing release artifacts.

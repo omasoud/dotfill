@@ -16,14 +16,14 @@ dotfill is a generic local-only utility for maintaining configured token and ide
 - Preserve `.env` comments, blank lines, ordering, unrelated variables, unrelated duplicates, and line endings.
 - Write only after explicit user action.
 - Create at most one backup per process session before the first write.
-- Keep raw token values, dropped import values, Authorization headers, and full `.env` contents out of logs, API responses, and browser storage.
+- Keep raw token values, dropped import values, Authorization headers, and full `.env` contents out of logs, API responses, and browser storage. Browser storage may contain only explicitly allowed non-secret UI preferences, such as the persisted color theme.
 - Keep all UI assets local to the package.
 
 ## Non-Goals
 
 - No cloud backend, accounts, telemetry, shared token storage, or remote sync.
 - No generic built-in service catalog.
-- No browser-side persistence.
+- No browser-side persistence of secrets, session tokens, or import contents.
 - No automatic token validation except explicit Test actions.
 - No secret vault or token rotation policy engine.
 - No in-UI TOML editor in the current version.
@@ -181,6 +181,11 @@ Service tests:
 - classify 401/403 responses as authentication failures;
 - store cached test status only in process memory;
 - reuse cached status only when the service-test fingerprint still matches.
+- report service-test success and failure through the configured logger/console
+  with service ID, HTTP status when available, and non-secret error context;
+- keep service-test logs secret-safe in normal and `--verbose` modes;
+- allow `--verbose` to show additional server/client/debug logging context;
+- import-screen service tests may test unsaved scan candidate values by scan ID, source key, and selected target, but must not write the target `.env` or update the saved-token service-test cache.
 
 ## Import Requirements
 
@@ -202,6 +207,20 @@ Commit behavior:
 - Latest status is recomputed against the current `.env`.
 - Latest no-change rows are skipped.
 - Changed service token variables invalidate cached test status.
+
+Import row test behavior:
+
+- Rows whose `Save as` selection resolves to an enabled service token variable and whose `Status` is not `No change` show a compact test button immediately before the `Status` column.
+- The test button is approximately checkbox-sized so it adds only a narrow action column.
+- The initial button state is `?` with a tooltip explaining that it tests the service using the imported value for the selected API key.
+- Pressing the button tests that service using the backend-held source value for the row, without saving the value.
+- Successful tests become a green check. Failed tests become a red x.
+- Detailed success/failure context follows the existing service-test reporting
+  model: log to the configured console/logger with non-secret context, and rely
+  on `--verbose` for additional logging context instead of row tooltip text.
+- The button is not shown for skipped/unmapped rows, derived-variable targets, non-service targets, or no-change rows.
+- Row test state resets to the initial untested state when the `Save as` selection changes.
+- All import row test states reset when the Scan button is pressed, or when a new source path is typed, browsed, or dropped.
 
 No-change detection for derived-variable import targets uses that derived
 definition's `compare` mode. No-change detection for service token targets is
@@ -274,6 +293,8 @@ When `locked_profile` is set:
 - Show config directory in a collapsed `dotfill config` disclosure, including profile directory when a profile is active.
 - Render dynamic identities, derived variables, and services.
 - Render service icons from configured icon keys with fallback `key`.
+- Provide a light/dark mode toggle.
+- Persist the selected light/dark theme across browser sessions as a non-secret UI preference.
 - Show the empty service message:
 
 ```text
@@ -284,7 +305,7 @@ Run a profile wrapper or edit config.toml.
 - Build import target dropdowns from dynamic state.
 - In the import wizard, show `Selected file: <filename>` for browsed files and `Dropped file: <filename>` for dropped files.
 - Make the import Scan button rescan the active source: typed path or cached selected/dropped file content.
-- Use no browser storage.
+- Use no browser storage except the persisted non-secret color-theme preference.
 - Keep token wizard and import wizard data in memory only.
 
 ## Documentation Requirements

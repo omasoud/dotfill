@@ -14,14 +14,20 @@ def _static_text() -> str:
     )
 
 
-def test_frontend_uses_no_browser_storage() -> None:
-    text = _static_text()
+def test_frontend_browser_storage_is_limited_to_theme_preference() -> None:
+    text_by_file = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in sorted(STATIC_DIR.glob("*.*"))
+    }
+    text = "\n".join(text_by_file.values())
 
-    forbidden = ["localStorage", "sessionStorage", "indexedDB", "document.cookie"]
+    forbidden = ["sessionStorage", "indexedDB", "document.cookie"]
 
     assert [term for term in forbidden if term in text] == []
-
-
+    assert "localStorage" not in "\n".join(
+        content for name, content in text_by_file.items() if name != "theme_state.js"
+    )
+    assert 'THEME_STORAGE_KEY = "dotfill.theme"' in text_by_file["theme_state.js"]
 
 def test_frontend_renders_generic_config_and_empty_service_text() -> None:
     text = _static_text()
@@ -55,3 +61,29 @@ def test_frontend_import_source_state_wiring_is_present() -> None:
     assert 'mode: "browse"' in text
     assert 'mode: "drop"' in text
     assert "Dropped file:" in text
+
+
+def test_frontend_import_test_wiring_is_present() -> None:
+    text = _static_text()
+
+    assert "import_test_state.js" in text
+    assert "canTestImportRow" in text
+    assert "importTestRequest" in text
+    assert "import-test-cell" in text
+    assert "import-test-header" in text
+    assert "Test this service using the imported API key" in text
+    assert "/api/import/test" in text
+    assert "clearImportTestState" in text
+    assert "resetImportTestStates" in text
+
+
+def test_frontend_theme_toggle_wiring_is_present() -> None:
+    text = _static_text()
+
+    assert "theme_state.js" in text
+    assert "renderThemeToggle" in text
+    assert "Switch to dark mode" in text
+    assert "Switch to light mode" in text
+    assert 'id="ic-sun"' in text
+    assert 'id="ic-moon"' in text
+    assert '[data-theme="dark"]' in text

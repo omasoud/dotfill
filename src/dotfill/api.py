@@ -32,6 +32,7 @@ from .import_scan import (
 from .models import (
     AppState,
     CommitImportRequest,
+    ImportTestRequest,
     SaveTokenRequest,
     ScanDroppedRequest,
     ScanPathRequest,
@@ -413,6 +414,47 @@ def create_app(ctx: AppContext) -> FastAPI:
         )
         ctx_in.session.import_scans[scan.scan_id] = scan
         return _scan_payload(scan)
+
+    @api.post("/import/test")
+    def test_import_candidate(
+        body: ImportTestRequest,
+        ctx_in: AppContext = Depends(session_dep),
+    ) -> dict[str, object]:
+        scan = ctx_in.session.import_scans.get(body.scanId)
+        if scan is None:
+            raise HTTPException(status_code=404, detail="Unknown scan_id")
+        source_value = scan.candidates.get(body.sourceKey)
+        if source_value is None:
+            raise HTTPException(status_code=400, detail="Unknown source key in scan")
+        state = _state(ctx_in)
+        token_vars_to_svc = {
+            svc.token_var: service_id
+            for service_id, svc in state.effective_config.services.items()
+        }
+        service_id = token_vars_to_svc.get(body.targetKey)
+        if service_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Import target is not a service token",
+            )
+        svc_def = state.effective_config.services[service_id]
+        identity_values = {i.name: i.effective_value for i in state.identities}
+        try:
+            resolved = resolve_url_template(svc_def.test_url_template, identity_values)
+        except UrlTemplateError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        result = run_service_test(
+            svc_def,
+            service_id=service_id,
+            resolved_test_url=resolved,
+            token=source_value.get_secret_value(),
+        )
+        return {
+            "service_id": service_id,
+            "status": result.status,
+            "http_status": result.http_status,
+            "error_message": result.error_message,
+        }
 
     @api.post("/import/commit")
     def commit_import(
