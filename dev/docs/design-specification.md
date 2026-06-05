@@ -305,6 +305,10 @@ FastAPI docs/OpenAPI routes are disabled.
 
 The frontend is static and package-local.
 
+`index.html` links a local SVG favicon from the packaged static assets so
+browser tabs show a dotfill-specific icon. The favicon should use a compact
+token/key motif that remains legible at tab size.
+
 Module memory holds:
 
 - session token;
@@ -344,8 +348,9 @@ The import mapping table includes a narrow action column immediately before
 `Status`. Rows whose `Save as` selection resolves to an enabled service token
 variable and whose status is not `No change` show an approximately
 checkbox-sized service-test button in that column. The untested state displays
-`?` with a tooltip explaining that the selected service will be tested using
-the imported API key. While running, the row shows an in-progress state; on
+the same test icon used by the main service-test actions, with a tooltip
+explaining that the selected service will be tested using the imported API key.
+While running, the row shows an in-progress state; on
 success it becomes a green check, and on failure it becomes a red x. Detailed
 success/failure context is not shown in the row tooltip or status text; it is
 reported through the same logger/console path as saved-token service tests,

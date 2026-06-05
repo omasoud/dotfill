@@ -651,7 +651,9 @@ function openImportWizard() {
       ? [icon("check")]
       : rowStatus === "failed"
         ? [icon("x")]
-        : [rowStatus === "testing" ? "..." : "?"];
+        : rowStatus === "testing"
+          ? ["..."]
+          : [icon("flask")];
     const title = rowStatus === "untested"
       ? "Test this service using the imported API key"
       : rowStatus === "testing"

@@ -56,6 +56,7 @@ This document records the current implementation state, verification expectation
 - [x] Static frontend persists only the non-secret `dotfill.theme` color-theme preference.
 - [x] Dashboard shows target `.env` path as the primary path and config directory inside a collapsed `dotfill config` disclosure.
 - [x] Dashboard includes a persisted light/dark mode toggle.
+- [x] Browser tabs use a local package favicon instead of the browser default.
 - [x] Dashboard supports empty generic state when no services, identities, or derived variables are configured.
 
 ## Verification Matrix
@@ -199,9 +200,10 @@ using the backend-held scan candidate value and without saving the value.
 - [x] Add frontend state for per-row import-test status: untested, testing,
       working, and failed.
 - [x] Render a narrow action column immediately before `Status`.
-- [x] Show an approximately checkbox-sized `?` button only when the current
-      `Save as` value resolves to an enabled service token variable and the row
-      status is not `no_change`.
+- [x] Show an approximately checkbox-sized button with the same test icon used
+      by main service-test actions only when the current `Save as` value
+      resolves to an enabled service token variable and the row status is not
+      `no_change`.
 - [x] Hide the button for skipped/unmapped rows, derived-variable targets,
       non-service targets, and no-change rows.
 - [x] Add tooltip/title text explaining that the button tests the selected

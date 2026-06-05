@@ -71,6 +71,7 @@ def test_frontend_import_test_wiring_is_present() -> None:
     assert "importTestRequest" in text
     assert "import-test-cell" in text
     assert "import-test-header" in text
+    assert '[icon("flask")]' in text
     assert "Test this service using the imported API key" in text
     assert "/api/import/test" in text
     assert "clearImportTestState" in text
@@ -87,3 +88,12 @@ def test_frontend_theme_toggle_wiring_is_present() -> None:
     assert 'id="ic-sun"' in text
     assert 'id="ic-moon"' in text
     assert '[data-theme="dark"]' in text
+
+
+def test_frontend_uses_local_svg_favicon() -> None:
+    index_text = STATIC_DIR.joinpath("index.html").read_text(encoding="utf-8")
+    favicon_text = STATIC_DIR.joinpath("favicon.svg").read_text(encoding="utf-8")
+
+    assert '<link rel="icon" type="image/svg+xml" href="/favicon.svg">' in index_text
+    assert 'viewBox="0 0 32 32"' in favicon_text
+    assert "stroke=" in favicon_text

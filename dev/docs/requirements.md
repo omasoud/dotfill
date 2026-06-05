@@ -212,7 +212,7 @@ Import row test behavior:
 
 - Rows whose `Save as` selection resolves to an enabled service token variable and whose `Status` is not `No change` show a compact test button immediately before the `Status` column.
 - The test button is approximately checkbox-sized so it adds only a narrow action column.
-- The initial button state is `?` with a tooltip explaining that it tests the service using the imported value for the selected API key.
+- The initial button state uses the same test icon as the main service-test actions, with a tooltip explaining that it tests the service using the imported value for the selected API key.
 - Pressing the button tests that service using the backend-held source value for the row, without saving the value.
 - Successful tests become a green check. Failed tests become a red x.
 - Detailed success/failure context follows the existing service-test reporting
@@ -293,6 +293,7 @@ When `locked_profile` is set:
 - Show config directory in a collapsed `dotfill config` disclosure, including profile directory when a profile is active.
 - Render dynamic identities, derived variables, and services.
 - Render service icons from configured icon keys with fallback `key`.
+- Use a local package favicon so browser tabs do not show the browser default icon.
 - Provide a light/dark mode toggle.
 - Persist the selected light/dark theme across browser sessions as a non-secret UI preference.
 - Show the empty service message:
