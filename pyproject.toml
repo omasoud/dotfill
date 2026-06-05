@@ -1,6 +1,6 @@
 [project]
 name = "dotfill"
-version = "0.3.0"
+version = "1.0.0"
 description = "Local-only helper to populate and maintain a personal .env file with API tokens and identity variables"
 readme = "README.md"
 authors = [
@@ -11,7 +11,7 @@ license-files = ["LICENSE"]
 requires-python = ">=3.14"
 keywords = ["api-tokens", "dotenv", "env", "local-first", "secrets"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
