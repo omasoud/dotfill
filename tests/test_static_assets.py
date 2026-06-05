@@ -63,9 +63,8 @@ def test_frontend_import_source_state_wiring_is_present() -> None:
     assert "createImportSourceState" in text
     assert "browseImportSource" in text
     assert "dropImportSource" in text
-    assert "editImportSource" in text
     assert "loadScanFromActiveSource" in text
-    assert 'mode: "path"' in text
+    assert 'mode: "empty"' in text
     assert 'mode: "browse"' in text
     assert 'mode: "drop"' in text
     assert "Dropped file:" in text

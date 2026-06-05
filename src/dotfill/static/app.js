@@ -6,10 +6,8 @@ import {
   browseImportSource,
   createImportSourceState,
   dropImportSource,
-  editImportSource,
   importSourceLabel,
   importSourceRequest,
-  pathImportSource,
 } from "./import_source_state.js";
 import {
   canTestImportRow,
@@ -59,12 +57,10 @@ function el(tag, attrs = {}, ...children) {
 
 function appendChild(node, child) {
   if (child == null || child === false) return;
-  if (Array.isArray(child)) {
-    child.forEach((c) => appendChild(node, c));
-  } else if (child instanceof Node) {
-    node.appendChild(child);
+  if (child instanceof Node) {
+    node.append(child);
   } else {
-    node.appendChild(document.createTextNode(String(child)));
+    node.append(String(child));
   }
 }
 
@@ -566,26 +562,17 @@ function openImportWizard() {
   const root = $("#root");
   root.innerHTML = "";
 
-  const pathInput = el("input", { type: "text", class: "path-input", placeholder: "Path to .env-like file" });
   const fileInput = el("input", { type: "file", accept: ".env,text/plain", style: "display:none" });
   const tableHost = el("div", {});
   let currentScan = null;
   let activeSource = createImportSourceState();
   let importTestStates = resetImportTestStates();
 
-  pathInput.addEventListener("input", () => {
-    activeSource = editImportSource(activeSource, pathInput.value);
-    currentScan = null;
-    importTestStates = resetImportTestStates();
-    renderTable();
-  });
-
   fileInput.addEventListener("change", async () => {
     const file = fileInput.files && fileInput.files[0];
     if (!file) return;
     const content = await file.text();
     activeSource = browseImportSource(activeSource, file.name, content);
-    pathInput.value = activeSource.displayValue;
     importTestStates = resetImportTestStates();
     await loadScanFromActiveSource();
     fileInput.value = "";
@@ -595,12 +582,8 @@ function openImportWizard() {
     showError("");
     importTestStates = resetImportTestStates();
     renderTable();
-    if (activeSource.mode === "path") {
-      activeSource = pathImportSource(pathInput.value);
-    }
     const request = importSourceRequest(activeSource);
-    if (activeSource.mode === "path" && !request.body.path) return;
-    if (activeSource.mode !== "path" && !request.body.filename) return;
+    if (!request.body.filename) return;
     try {
       currentScan = await api("POST", request.path, request.body);
       renderTable();
@@ -797,7 +780,7 @@ function openImportWizard() {
     { class: "dropzone" },
     el("div", { class: "dropzone-icon" }, icon("cloud-upload", "icon icon-xl")),
     el("div", { class: "dropzone-primary" }, "Drop a .env file here"),
-    el("div", { class: "dropzone-secondary" }, "or paste a path below")
+    el("div", { class: "dropzone-secondary" }, "or browse to select one")
   );
 
   dropzone.addEventListener("dragover", (e) => {
@@ -814,7 +797,6 @@ function openImportWizard() {
     if (!file) return;
     const content = await file.text();
     activeSource = dropImportSource(activeSource, file.name, content);
-    pathInput.value = activeSource.displayValue;
     importTestStates = resetImportTestStates();
     await loadScanFromActiveSource();
   });
@@ -862,8 +844,7 @@ function openImportWizard() {
     dropzone,
     el(
       "div",
-      { class: "path-row" },
-      pathInput,
+      { class: "import-controls" },
       el("button", { onClick: () => fileInput.click() }, "Browse"),
       el("button", { onClick: loadScanFromActiveSource }, "Scan")
     ),

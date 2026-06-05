@@ -122,7 +122,6 @@ Service tests support configured bearer, header API-key, and basic auth requests
 
 The import workflow can scan:
 
-- a typed file path;
 - a file selected with Browse;
 - a dropped file.
 

@@ -38,24 +38,15 @@ def test_import_source_state_transitions_and_requests() -> None:
           browseImportSource,
           createImportSourceState,
           dropImportSource,
-          editImportSource,
           importSourceLabel,
           importSourceRequest,
         }} from {json.dumps(_module_url())};
 
         let source = createImportSourceState();
-        assert.equal(source.mode, "path");
+        assert.equal(source.mode, "empty");
         assert.deepEqual(importSourceRequest(source), {{
-          path: "/api/import/scan-path",
-          body: {{ path: "" }},
-        }});
-
-        source = editImportSource(source, String.raw`C:\\tmp\\manual.env`);
-        assert.equal(source.mode, "path");
-        assert.equal(source.displayValue, String.raw`C:\\tmp\\manual.env`);
-        assert.deepEqual(importSourceRequest(source), {{
-          path: "/api/import/scan-path",
-          body: {{ path: String.raw`C:\\tmp\\manual.env` }},
+          path: "/api/import/scan-dropped",
+          body: {{ filename: "", content: "" }},
         }});
 
         source = browseImportSource(source, "picked.env", "A=1\\n");
@@ -74,14 +65,6 @@ def test_import_source_state_transitions_and_requests() -> None:
         assert.deepEqual(importSourceRequest(source), {{
           path: "/api/import/scan-dropped",
           body: {{ filename: "dropped.env", content: "A=2\\n" }},
-        }});
-
-        source = editImportSource(source, String.raw`C:\\tmp\\replacement.env`);
-        assert.equal(source.mode, "path");
-        assert.equal(source.content, null);
-        assert.deepEqual(importSourceRequest(source), {{
-          path: "/api/import/scan-path",
-          body: {{ path: String.raw`C:\\tmp\\replacement.env` }},
         }});
     """
 

@@ -35,7 +35,6 @@ from .models import (
     ImportTestRequest,
     SaveTokenRequest,
     ScanDroppedRequest,
-    ScanPathRequest,
     SessionState,
     TestResult,
 )
@@ -198,39 +197,6 @@ def _service_fingerprint(
         session_token=state.session.token,
         basic_username=basic_username,
     )
-
-
-def _read_import_source_path(raw_path: str) -> tuple[str, str]:
-    # Typed-path import intentionally reads an explicit local file selected by
-    # the session-authenticated localhost UI.
-    if raw_path.strip() == "":
-        raise HTTPException(status_code=400, detail="Import source path is required")
-    try:
-        path = Path(raw_path).expanduser().resolve(strict=True)
-    except (OSError, RuntimeError) as exc:
-        log.warning("Import source path resolution failed: %s", exc)
-        raise HTTPException(
-            status_code=400,
-            detail="Import source file was not found",
-        ) from None
-    if not path.is_file():
-        raise HTTPException(
-            status_code=400,
-            detail="Import source path must be a file",
-        )
-    try:
-        return f"Selected file: {path.name}", path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        raise HTTPException(
-            status_code=400,
-            detail="Import source file must be UTF-8 text",
-        ) from None
-    except OSError as exc:
-        log.warning("Import source path read failed: %s", exc)
-        raise HTTPException(
-            status_code=400,
-            detail="Import source file could not be read",
-        ) from None
 
 
 def create_app(ctx: AppContext) -> FastAPI:
@@ -429,22 +395,6 @@ def create_app(ctx: AppContext) -> FastAPI:
             )
         ctx_in.session.queue_test_all_on_dashboard_load = False
         return {"results": results}
-
-    @api.post("/import/scan-path")
-    def scan_path(
-        body: ScanPathRequest,
-        ctx_in: AppContext = Depends(session_dep),
-    ) -> dict[str, object]:
-        source_label, text = _read_import_source_path(body.path)
-        state = _state(ctx_in)
-        scan = scan_source_text(
-            source_label=source_label,
-            source_text=text,
-            current_doc=state.env_doc,
-            config=state.effective_config,
-        )
-        ctx_in.session.import_scans[scan.scan_id] = scan
-        return _scan_payload(scan)
 
     @api.post("/import/scan-dropped")
     def scan_dropped(

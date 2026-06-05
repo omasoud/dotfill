@@ -127,11 +127,6 @@ class SaveTokenRequest(BaseModel):
     token: SecretStr
 
 
-class ScanPathRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    path: str
-
-
 class ScanDroppedRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     filename: str
