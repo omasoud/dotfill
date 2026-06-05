@@ -8,6 +8,7 @@ from typing import Literal
 
 DisplayMode = Literal["plain", "masked"]
 CompareMode = Literal["exact", "casefold"]
+AuthKind = Literal["bearer", "header", "basic"]
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,16 @@ class DerivedVariableDefinition:
 
 
 @dataclass(frozen=True)
+class AuthConfig:
+    """One service-test authentication configuration."""
+
+    kind: AuthKind = "bearer"
+    header: str | None = None
+    username_identity: str | None = None
+    username: str | None = None
+
+
+@dataclass(frozen=True)
 class ServiceDefinition:
     """One managed service token definition."""
 
@@ -55,7 +66,8 @@ class ServiceDefinition:
     token_url_template: str
     test_url_template: str
     display_name: str
-    auth: Literal["bearer"] = "bearer"
+    auth: AuthConfig = field(default_factory=AuthConfig)
+    test_headers: dict[str, str] = field(default_factory=dict)
     icon: str | None = None
     tls_verify: bool = True
 

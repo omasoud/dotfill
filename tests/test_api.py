@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 
 import httpx
@@ -317,6 +318,37 @@ def test_test_endpoint_no_token_400(client: TestClient, ctx: AppContext) -> None
 
 
 @respx.mock
+def test_test_endpoint_uses_basic_auth_identity(
+    client: TestClient,
+    ctx: AppContext,
+    config_root: Path,
+    env_path: Path,
+) -> None:
+    config_file = config_root / "config.toml"
+    config_file.write_text(
+        config_file.read_text(encoding="utf-8")
+        + """
+
+[services.SERVICE_A.auth]
+kind = "basic"
+username_identity = "WORK_EMAIL"
+""",
+        encoding="utf-8",
+    )
+    env_path.write_text("SERVICE_A_TOKEN=t\n", encoding="utf-8")
+    route = respx.get("https://service-a.example.com/api/v1/me").mock(
+        return_value=httpx.Response(200)
+    )
+    expected = base64.b64encode(b"alice@example.com:t").decode("ascii")
+
+    r = client.post("/api/test/SERVICE_A", headers=_headers(ctx))
+
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "working"
+    assert route.calls.last.request.headers["Authorization"] == f"Basic {expected}"
+
+
+@respx.mock
 def test_test_all_skips_services_without_tokens(
     client: TestClient, ctx: AppContext, env_path: Path
 ) -> None:
@@ -372,6 +404,53 @@ def test_import_test_uses_scan_candidate_without_saving_or_caching(
     assert ctx.session.backup_created is False
     assert ctx.session.test_results["SERVICE_A"].status == "failed"
     assert "SERVICE_A_TOKEN" in ctx.session.import_scans[scan_id].candidates
+
+
+@respx.mock
+def test_import_test_uses_header_auth_and_static_headers(
+    client: TestClient,
+    ctx: AppContext,
+    config_root: Path,
+) -> None:
+    config_file = config_root / "config.toml"
+    config_file.write_text(
+        config_file.read_text(encoding="utf-8")
+        + """
+
+[services.SERVICE_A.auth]
+kind = "header"
+header = "x-api-key"
+
+[services.SERVICE_A.test_headers]
+anthropic-version = "2023-06-01"
+""",
+        encoding="utf-8",
+    )
+    route = respx.get("https://service-a.example.com/api/v1/me").mock(
+        return_value=httpx.Response(200)
+    )
+    r = client.post(
+        "/api/import/scan-dropped",
+        headers=_headers(ctx),
+        json={"filename": "src.env", "content": "SERVICE_A_TOKEN=imported-token\n"},
+    )
+    scan_id = r.json()["scan_id"]
+
+    r2 = client.post(
+        "/api/import/test",
+        headers=_headers(ctx),
+        json={
+            "scanId": scan_id,
+            "sourceKey": "SERVICE_A_TOKEN",
+            "targetKey": "SERVICE_A_TOKEN",
+        },
+    )
+
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["status"] == "working"
+    request = route.calls.last.request
+    assert request.headers["x-api-key"] == "imported-token"
+    assert request.headers["anthropic-version"] == "2023-06-01"
 
 
 @respx.mock

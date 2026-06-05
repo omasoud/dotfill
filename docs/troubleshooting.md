@@ -92,17 +92,20 @@ Duplicate unrelated variables are preserved and do not block writes.
 
 ## A service test fails
 
-Service tests currently support bearer authentication only. The configured API must accept:
+Service tests support bearer, header API-key, and basic auth. Check the
+configured auth table matches the API:
 
-```http
-Authorization: Bearer <token>
-Accept: application/json
+```toml
+[services.EXAMPLE.auth]
+kind = "bearer"
 ```
 
 Check that:
 
 - the token is current;
-- `test_url` points to an endpoint that accepts bearer tokens;
+- `test_url` points to an endpoint that accepts the configured auth mode;
+- any required static headers are configured in `[services.<ID>.test_headers]`;
+- basic auth `username_identity` is resolved or `username` is configured;
 - all URL template identities resolve;
 - TLS verification is appropriate for the service.
 

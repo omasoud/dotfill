@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import hashlib
 import hmac
 import json
@@ -9,7 +10,7 @@ from pathlib import Path
 
 from .config import collect_managed_variable_names, resolve_url_template
 from .config_loader import load_effective_config
-from .config_models import EffectiveConfig
+from .config_models import AuthConfig, EffectiveConfig, ServiceDefinition
 from .config_paths import ConfigContext, resolve_config_context
 from .envdoc import EnvDocument
 from .errors import DuplicateManagedVariableError, UnresolvedIdentityError
@@ -43,10 +44,12 @@ def service_test_fingerprint(
     service_id: str,
     token_var: str,
     resolved_test_url: str,
-    auth: str,
+    auth_config: AuthConfig,
+    test_headers: Mapping[str, str],
     tls_verify: bool,
     token: str,
     session_token: str,
+    basic_username: str | None = None,
 ) -> str:
     """Return a non-secret, session-scoped fingerprint for cached test status."""
     token_digest = hmac.new(
@@ -54,16 +57,68 @@ def service_test_fingerprint(
         token.encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
+    username_digest = (
+        hmac.new(
+            session_token.encode("utf-8"),
+            basic_username.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        if basic_username is not None
+        else None
+    )
+    auth_payload: dict[str, object]
+    kind = getattr(auth_config, "kind")
+    if kind == "bearer":
+        auth_payload = {"kind": "bearer"}
+    elif kind == "header":
+        auth_payload = {
+            "kind": "header",
+            "header": str(getattr(auth_config, "header")).casefold(),
+        }
+    elif kind == "basic":
+        username_identity = getattr(auth_config, "username_identity")
+        auth_payload = {
+            "kind": "basic",
+            "username_identity": username_identity,
+            "username_source": "identity" if username_identity else "literal",
+            "username": username_digest,
+        }
+    else:
+        auth_payload = {"kind": str(kind)}
+    header_payload = [
+        [name.casefold(), value]
+        for name, value in sorted(
+            test_headers.items(),
+            key=lambda item: item[0].casefold(),
+        )
+    ]
     payload = {
         "service_id": service_id,
         "token_var": token_var,
         "resolved_test_url": resolved_test_url,
-        "auth": auth,
+        "auth": auth_payload,
+        "test_headers": header_payload,
         "tls_verify": tls_verify,
         "token": token_digest,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _basic_fingerprint_username(
+    service: ServiceDefinition,
+    identity_values: Mapping[str, str | None],
+) -> str | None:
+    if service.auth.kind != "basic":
+        return None
+    if service.auth.username is not None:
+        return service.auth.username
+    if service.auth.username_identity is None:
+        return None
+    value = identity_values.get(service.auth.username_identity)
+    if value is None or value == "":
+        return None
+    return value
 
 
 def _needs_ad_facts(config: EffectiveConfig) -> bool:
@@ -179,10 +234,15 @@ def build_service_states(
                 service_id=service_id,
                 token_var=service.token_var,
                 resolved_test_url=resolved_test_url,
-                auth=service.auth,
+                auth_config=service.auth,
+                test_headers=service.test_headers,
                 tls_verify=service.tls_verify,
                 token=token_value,
                 session_token=session_token,
+                basic_username=_basic_fingerprint_username(
+                    service,
+                    identity_values,
+                ),
             )
             cached = (test_results or {}).get(service_id)
         else:

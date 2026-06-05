@@ -177,16 +177,26 @@ def _service_fingerprint(
     service_id: str,
     resolved_test_url: str,
     token: str,
+    identity_values: dict[str, str | None],
 ) -> str:
     svc_def = state.effective_config.services[service_id]
+    basic_username = None
+    if svc_def.auth.kind == "basic":
+        if svc_def.auth.username is not None:
+            basic_username = svc_def.auth.username
+        elif svc_def.auth.username_identity is not None:
+            value = identity_values.get(svc_def.auth.username_identity)
+            basic_username = value if value else None
     return service_test_fingerprint(
         service_id=service_id,
         token_var=svc_def.token_var,
         resolved_test_url=resolved_test_url,
-        auth=svc_def.auth,
+        auth_config=svc_def.auth,
+        test_headers=svc_def.test_headers,
         tls_verify=svc_def.tls_verify,
         token=token,
         session_token=state.session.token,
+        basic_username=basic_username,
     )
 
 
@@ -315,12 +325,14 @@ def create_app(ctx: AppContext) -> FastAPI:
             service_id=service_id,
             resolved_test_url=resolved,
             token=token,
+            identity_values=identity_values,
         )
         result.fingerprint = _service_fingerprint(
             state,
             service_id=service_id,
             resolved_test_url=resolved,
             token=token,
+            identity_values=identity_values,
         )
         ctx_in.session.test_results[service_id] = result
         return {
@@ -362,12 +374,14 @@ def create_app(ctx: AppContext) -> FastAPI:
                 service_id=svc_id,
                 resolved_test_url=resolved,
                 token=token,
+                identity_values=identity_values,
             )
             result.fingerprint = _service_fingerprint(
                 state,
                 service_id=svc_id,
                 resolved_test_url=resolved,
                 token=token,
+                identity_values=identity_values,
             )
             ctx_in.session.test_results[svc_id] = result
             results.append(
@@ -448,6 +462,7 @@ def create_app(ctx: AppContext) -> FastAPI:
             service_id=service_id,
             resolved_test_url=resolved,
             token=source_value.get_secret_value(),
+            identity_values=identity_values,
         )
         return {
             "service_id": service_id,

@@ -67,9 +67,11 @@ display_name = "Example"
 token_var = "EXAMPLE_TOKEN"
 token_url = "https://service.example.com/users/{WORK_USER}/tokens"
 test_url = "https://service.example.com/me"
-auth = "bearer"
 tls_verify = true
 icon = "key"
+
+[services.EXAMPLE.auth]
+kind = "bearer"
 ```
 
 Then run:
@@ -114,7 +116,7 @@ dotfill
 
 Use the service card to paste and save a token. Missing enabled derived variables are filled during token saves. Identity variables are read as explicit overrides when present, but dotfill does not write identity variables automatically.
 
-Service tests currently support bearer-token APIs only. Tests send `Authorization: Bearer <token>` to the configured `test_url` after explicit user action.
+Service tests support configured bearer, header API-key, and basic auth requests to the configured `test_url` after explicit user action.
 
 ## Import from another `.env` file
 

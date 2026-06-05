@@ -11,6 +11,8 @@ from typing import Any, cast
 
 from .config_merge import merge_config_layers
 from .config_models import (
+    AuthConfig,
+    AuthKind,
     CompareMode,
     DerivedVariableDefinition,
     DisplayMode,
@@ -37,6 +39,7 @@ SUPPORTED_IDENTITY_SOURCES = {
 
 _SERVICE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _PLACEHOLDER_RE = re.compile(r"\{([^{}]+)\}")
+_HTTP_HEADER_NAME_RE = re.compile(r"^[A-Za-z0-9!#$%&'*+\-.^_`|~]+$")
 _TOP_LEVEL_KEYS = {
     "version",
     "name",
@@ -64,6 +67,7 @@ _SERVICE_FIELDS = {
     "enabled",
     "icon",
     "test_url",
+    "test_headers",
     "tls_verify",
     "token_url",
     "token_var",
@@ -272,13 +276,24 @@ def _build_services(
         display_name = _required_str(
             section, "display_name", f"services.{service_id}.display_name"
         )
-        auth = _optional_str(section, "auth", f"services.{service_id}.auth")
-        if auth is None:
-            auth = "bearer"
-        if auth != "bearer":
-            raise ConfigSchemaError(
-                f"services.{service_id}.auth: unsupported auth value {auth!r}"
-            )
+        auth = _build_auth_config(
+            section,
+            path=f"services.{service_id}.auth",
+            identities=identities,
+        )
+        test_headers = _build_test_headers(
+            _optional_table(
+                section,
+                "test_headers",
+                f"services.{service_id}.test_headers",
+            ),
+            path=f"services.{service_id}.test_headers",
+        )
+        _validate_auth_header_conflict(
+            service_id=service_id,
+            auth=auth,
+            test_headers=test_headers,
+        )
         icon = _optional_str(section, "icon", f"services.{service_id}.icon")
         tls_verify = _optional_bool(
             section, "tls_verify", f"services.{service_id}.tls_verify", default=True
@@ -291,11 +306,112 @@ def _build_services(
             token_url_template=token_url,
             test_url_template=test_url,
             display_name=display_name,
-            auth="bearer",
+            auth=auth,
+            test_headers=test_headers,
             icon=icon,
             tls_verify=tls_verify,
         )
     return out
+
+
+def _build_auth_config(
+    section: Mapping[str, Any],
+    *,
+    path: str,
+    identities: dict[str, IdentityDefinition],
+) -> AuthConfig:
+    if "auth" not in section:
+        return AuthConfig()
+    auth = _required_table(section, "auth", path)
+    kind = _required_str(auth, "kind", f"{path}.kind")
+    if kind == "query":
+        raise ConfigSchemaError(f"{path}.kind: query auth is not supported")
+    if kind == "bearer":
+        _reject_unknown_keys(auth, {"kind"}, path)
+        return AuthConfig(kind="bearer")
+    if kind == "header":
+        _reject_unknown_keys(auth, {"kind", "header"}, path)
+        header = _required_str(auth, "header", f"{path}.header")
+        _validate_http_header_name(header, f"{path}.header")
+        return AuthConfig(kind="header", header=header)
+    if kind == "basic":
+        _reject_unknown_keys(auth, {"kind", "username", "username_identity"}, path)
+        has_username = "username" in auth
+        has_username_identity = "username_identity" in auth
+        username = _optional_str(auth, "username", f"{path}.username")
+        username_identity = _optional_str(
+            auth,
+            "username_identity",
+            f"{path}.username_identity",
+        )
+        if has_username == has_username_identity:
+            raise ConfigSchemaError(
+                f"{path}: exactly one of username or username_identity is required"
+            )
+        if username is not None and username == "":
+            raise ConfigSchemaError(f"{path}.username: non-empty string is required")
+        if username is not None and ":" in username:
+            raise ConfigSchemaError(f"{path}.username: must not contain ':'")
+        if username_identity is not None:
+            if username_identity == "":
+                raise ConfigSchemaError(
+                    f"{path}.username_identity: non-empty string is required"
+                )
+            if username_identity not in identities:
+                raise ConfigSchemaError(
+                    f"{path}.username_identity: unknown or disabled identity "
+                    f"{username_identity!r}"
+                )
+        return AuthConfig(
+            kind=cast(AuthKind, kind),
+            username=username,
+            username_identity=username_identity,
+        )
+    raise ConfigSchemaError(f"{path}.kind: unsupported auth kind {kind!r}")
+
+
+def _build_test_headers(
+    data: Mapping[str, Any],
+    *,
+    path: str,
+) -> dict[str, str]:
+    out: dict[str, str] = {}
+    seen: set[str] = set()
+    for name, value in data.items():
+        header = str(name)
+        folded = header.casefold()
+        header_path = f"{path}.{header}"
+        if folded in seen:
+            raise ConfigSchemaError(f"{header_path}: duplicate header name")
+        seen.add(folded)
+        _validate_http_header_name(header, header_path)
+        if not isinstance(value, str) or value == "":
+            raise ConfigSchemaError(f"{header_path}: non-empty string is required")
+        out[header] = value
+    return out
+
+
+def _auth_generated_header(auth: AuthConfig) -> str:
+    if auth.kind in {"bearer", "basic"}:
+        return "Authorization"
+    if auth.kind == "header" and auth.header is not None:
+        return auth.header
+    raise ConfigSchemaError(f"unsupported auth kind {auth.kind!r}")
+
+
+def _validate_auth_header_conflict(
+    *,
+    service_id: str,
+    auth: AuthConfig,
+    test_headers: Mapping[str, str],
+) -> None:
+    auth_header = _auth_generated_header(auth).casefold()
+    for header in test_headers:
+        if header.casefold() == auth_header:
+            raise ConfigSchemaError(
+                f"services.{service_id}.test_headers.{header}: conflicts with "
+                "auth-generated header"
+            )
 
 
 def _build_import_aliases(
@@ -389,6 +505,11 @@ def _validate_url_placeholders(
             raise ConfigSchemaError(
                 f"{path}: unknown or disabled identity placeholder {{{placeholder}}}"
             )
+
+
+def _validate_http_header_name(name: str, path: str) -> None:
+    if not _HTTP_HEADER_NAME_RE.fullmatch(name):
+        raise ConfigSchemaError(f"{path}: invalid HTTP header name")
 
 
 def _resolve_configured_path(value: str) -> Path:

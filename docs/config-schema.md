@@ -50,6 +50,10 @@ token_url = "https://service.example.com/tokens"
 test_url = "https://service.example.com/me"
 ```
 
+Service auth tables replace as a unit when a later layer supplies
+`[services.<ID>.auth]`. Static service test headers merge by case-insensitive
+header name, with later layers overriding earlier header values.
+
 An override can disable an inherited item:
 
 ```toml
@@ -224,9 +228,11 @@ display_name = "Example"
 token_var = "EXAMPLE_TOKEN"
 token_url = "https://service.example.com/users/{WORK_USER}/tokens"
 test_url = "https://service.example.com/me"
-auth = "bearer"
 tls_verify = true
 icon = "key"
+
+[services.EXAMPLE.auth]
+kind = "bearer"
 ```
 
 | Field | Required | Description |
@@ -234,8 +240,9 @@ icon = "key"
 | `display_name` | yes | Label shown in the UI. |
 | `token_var` | yes | Target `.env` variable for the token. |
 | `token_url` | yes | URL template for opening the service token page. |
-| `test_url` | yes | URL template for bearer-token testing. |
-| `auth` | no | Defaults to `bearer`; only `bearer` is supported. |
+| `test_url` | yes | URL template for explicit service testing. |
+| `[services.<ID>.auth]` | no | Auth table for service testing. Omitted auth defaults to bearer. |
+| `[services.<ID>.test_headers]` | no | Static non-secret headers to include in service tests. |
 | `tls_verify` | no | Defaults to `true`. |
 | `icon` | no | Frontend icon key; fallback is `key`. |
 | `enabled` | no | Defaults to `true`; `false` removes the service. |
@@ -243,6 +250,81 @@ icon = "key"
 URL templates may reference enabled identities with `{IDENTITY_NAME}` placeholders.
 
 `tls_verify = false` should be used only when the configured service explicitly requires it.
+
+If `auth` is present, it must be a table. Scalar `auth = "bearer"` is invalid.
+
+### Bearer Auth
+
+```toml
+[services.GITHUB.auth]
+kind = "bearer"
+```
+
+Generated auth header:
+
+```http
+Authorization: Bearer <token>
+```
+
+### Header API-Key Auth
+
+```toml
+[services.ANTHROPIC.auth]
+kind = "header"
+header = "x-api-key"
+
+[services.ANTHROPIC.test_headers]
+anthropic-version = "2023-06-01"
+```
+
+Generated auth header:
+
+```http
+x-api-key: <token>
+```
+
+### Basic Auth
+
+Use an identity-derived username:
+
+```toml
+[services.JIRA.auth]
+kind = "basic"
+username_identity = "WORK_EMAIL"
+```
+
+or a fixed username:
+
+```toml
+[services.INTERNAL.auth]
+kind = "basic"
+username = "fixed-user"
+```
+
+Generated auth header:
+
+```http
+Authorization: Basic base64(username:token)
+```
+
+Basic literal usernames may not contain `:`. `username_identity` must reference
+an enabled identity. If that identity is unresolved at test time, only that
+service test fails.
+
+### Service Auth Validation
+
+dotfill rejects:
+
+- unknown auth kinds;
+- `kind = "query"`;
+- unknown fields for the selected auth kind;
+- missing required auth fields;
+- invalid HTTP header names;
+- case-insensitive duplicate `test_headers`;
+- auth-generated header conflicts with `test_headers`;
+- basic auth with both or neither username source;
+- basic literal usernames containing `:`;
+- `username_identity` references to unknown or disabled identities.
 
 ## Import Aliases
 

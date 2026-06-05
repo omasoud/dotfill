@@ -102,9 +102,11 @@ display_name = "Example"
 token_var = "EXAMPLE_TOKEN"
 token_url = "https://service.example.com/users/{WORK_USER}/tokens"
 test_url = "https://service.example.com/me"
-auth = "bearer"
 tls_verify = true
 icon = "key"
+
+[services.EXAMPLE.auth]
+kind = "bearer"
 
 [import_aliases.OLD_EXAMPLE_TOKEN]
 target = "EXAMPLE_TOKEN"
@@ -126,7 +128,7 @@ The parser/writer preserves comments, blank lines, unrelated variables, unrelate
 - save service tokens;
 - fill missing enabled derived variables during saves;
 - import token/derived values from another `.env`-like file;
-- test configured bearer tokens on explicit user action.
+- test configured service tokens on explicit user action.
 
 When no services are configured, the dashboard shows an empty generic state.
 
@@ -136,7 +138,7 @@ When no services are configured, the dashboard shows an empty generic state.
 - Raw token values are not returned by state/import APIs.
 - Dropped import values are kept only in backend session memory as secret values.
 - The browser keeps session and token input in memory only; no browser storage is used.
-- Service tests send `Authorization: Bearer <token>` only to configured test URLs.
+- Service tests support configured bearer, header API-key, and basic auth requests only to configured test URLs.
 - Service tests verify TLS by default. Use `tls_verify = false` only when a configured service explicitly requires it.
 
 ## Wrapper Packages

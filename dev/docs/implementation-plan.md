@@ -18,7 +18,9 @@ This document records the current implementation state, verification expectation
 - [x] `dotfill config open` and dashboard config-open create only the final config directory and do not create TOML files.
 - [x] Present TOML files must include `version = 1`.
 - [x] Top-level sections and known table fields are strict; unknown entries are rejected.
-- [x] Later config layers override scalars and merge keyed tables.
+- [x] Later config layers override scalars and merge keyed tables, with service
+      auth replacing as a unit and service test headers merging by
+      case-insensitive header name.
 - [x] `enabled = false` removes inherited services, identities, derived variables, and import aliases before required-field validation.
 - [x] Target `.env` path resolves from CLI `--env-path`, then `[target].default_env_path`, then home `.env`.
 - [x] `.env` parsing preserves comments, blank lines, unrelated variables, unrelated duplicates, quote style, and line endings.
@@ -32,9 +34,13 @@ This document records the current implementation state, verification expectation
 - [x] dotfill never writes identity variables automatically.
 - [x] Derived variables copy enabled identities, use configured comparison metadata for aligned/diverged state, and are filled only when missing or empty during token saves.
 - [x] Save flow writes the selected service token plus missing enabled derived variables.
-- [x] Service tests support bearer authentication only.
-- [x] Service tests send `Authorization: Bearer <token>` and `Accept: application/json`, verify TLS by default, and classify status safely.
-- [x] Cached service-test results are process-local and invalidated by token, service, auth, TLS, or URL changes.
+- [x] Service tests support bearer, header API-key, and basic auth.
+- [x] Service tests send configured auth headers and `Accept: application/json`,
+      apply static test headers, verify TLS by default, and classify status
+      safely.
+- [x] Cached service-test results are process-local and invalidated by token,
+      service, auth config, static headers, resolved basic username, TLS, or
+      URL changes.
 - [x] Import scans target enabled service token variables and enabled derived variables; identities are never import targets.
 - [x] Import scans skip empty source values and return masked values only.
 - [x] Import aliases are configured in TOML and never hardcoded.
@@ -80,7 +86,8 @@ Focused verification areas:
 - [x] Save and backup behavior.
 - [x] Import scan and commit behavior, including no raw source values in responses.
 - [x] Import-row service testing with backend-held candidate values and no saved-token cache mutation.
-- [x] Bearer service test behavior and secret-safe logging.
+- [x] Bearer, header API-key, and basic service test behavior with
+      secret-safe logging.
 - [x] API session protection, origin checks, CORS absence, and bootstrap behavior.
 - [x] CLI commands and stable entrypoint behavior.
 - [x] Frontend static checks for no secret browser storage and generic bundled assets.
@@ -225,10 +232,79 @@ using the backend-held scan candidate value and without saving the value.
 - [x] After implementation, update current-status and verification checklists
       to mark import-row service testing as implemented.
 
+## Implemented: Multi-Mode Service-Test Auth
+
+Goal: let configured services test bearer tokens, header API keys, and basic
+auth credentials through generic TOML without adding provider-specific behavior
+or weakening secret boundaries. Query-string auth remains deferred.
+
+- [x] Add an `AuthConfig` config model with supported kinds `bearer`,
+      `header`, and `basic`; keep omitted service auth defaulting to bearer.
+- [x] Add `test_headers: dict[str, str]` to `ServiceDefinition`, defaulting to
+      no extra headers.
+- [x] Reject scalar service auth values such as `auth = "bearer"`; a present
+      auth value must be `[services.<ID>.auth]`.
+- [x] Validate auth tables strictly:
+      unknown kinds, `kind = "query"`, unknown fields, missing required fields,
+      invalid HTTP header names, basic auth with both or neither username
+      source, basic literal usernames containing `:`, and unknown or disabled
+      `username_identity` references must fail schema loading with non-secret
+      errors.
+- [x] Validate `test_headers` as a string table with valid HTTP header names,
+      non-empty values, and no case-insensitive duplicate header names.
+- [x] Reject case-insensitive conflicts between static `test_headers` and the
+      auth-generated header for bearer, header, or basic auth.
+- [x] Update config merge semantics so `[services.<ID>.auth]` replaces as a
+      unit when present in a later layer.
+- [x] Update config merge semantics so `[services.<ID>.test_headers]` merges
+      by case-insensitive header name, with later layers overriding earlier
+      values while preserving the later configured casing.
+- [x] Add a centralized service-test request preparation helper that starts
+      with `Accept: application/json`, applies static test headers, then adds
+      the auth-generated header.
+- [x] Implement bearer request preparation as
+      `Authorization: Bearer <token>`.
+- [x] Implement header API-key request preparation by placing the token in the
+      configured header name.
+- [x] Implement basic auth request preparation as
+      `Authorization: Basic <base64(username:token)>`, resolving
+      `username_identity` from current identity state at test time.
+- [x] Make unresolved basic `username_identity` fail only that service test
+      with non-secret error context unless another state dependency already
+      requires the same identity.
+- [x] Thread current identity values through saved-token tests, test-all, and
+      import-row candidate tests so all paths use the same auth preparation.
+- [x] Expand the service-test fingerprint to include normalized auth config,
+      normalized static headers, TLS setting, resolved test URL, service ID,
+      token variable, session-scoped token digest, and session-scoped digest of
+      any resolved basic username material.
+- [x] Keep service-test logs and API responses free of raw tokens, generated
+      auth headers, configured API-key headers, Basic-encoded credentials,
+      dropped import contents, and full `.env` contents.
+- [x] Add config-loader and merge tests for valid bearer/header/basic auth,
+      omitted-auth defaults, scalar-auth rejection, query rejection, strict
+      auth field validation, static header validation, header conflicts, auth
+      table replacement, and case-insensitive static-header overrides.
+- [x] Add service-test unit tests for outbound bearer, header API-key, basic
+      auth, static headers, default `Accept`, TLS behavior, unresolved basic
+      username handling, and secret-safe logs.
+- [x] Add resolver/API tests proving cached status invalidates when auth kind,
+      auth header, static headers, basic username source or resolved value,
+      TLS, URL, or token changes.
+- [x] Add import-row service-test API tests proving unsaved candidate values
+      use the configured auth mode without updating saved-token cache.
+- [x] Update `README.md`, `docs/config-schema.md`, `docs/getting-started.md`,
+      and `docs/troubleshooting.md` after implementation so public docs no
+      longer describe service tests as bearer-only.
+- [x] After implementation, update current-status and verification checklists
+      to mark bearer/header/basic auth and static service test headers as
+      implemented.
+
 ## Future Roadmap
 
-- [ ] Add configurable non-bearer service-test auth modes.
-- [ ] Support provider-specific static headers when service tests need them.
+- [ ] Add query-string service-test auth after redacted URL plumbing and tests
+      cover logs, `TestResult.error_message`, API responses, exception paths,
+      and debug output.
 - [ ] Consider a generic health-check response matcher for APIs where any 2xx is not sufficient.
 - [ ] Add in-UI affordances for editing or locating TOML config files without turning the UI into a config editor.
 - [ ] Add optional same-target import warnings for typed path imports when source and target resolve to the same file.
@@ -240,6 +316,6 @@ using the backend-held scan candidate value and without saving the value.
 
 - Prefer changing behavior in the shared domain layer before adding API/UI-only logic.
 - Keep wrapper packages outside the generic package. They should call stable entrypoints and provide config, not import internal CLI objects.
-- Treat raw tokens, dropped import contents, Authorization headers, and full `.env` contents as secret material.
+- Treat raw tokens, dropped import contents, generated auth headers/credentials, and full `.env` contents as secret material.
 - Keep browser state transient except explicitly allowed non-secret UI preferences; never store secrets, session tokens, import contents, or full `.env` contents in `localStorage`, `sessionStorage`, IndexedDB, or cookies.
 - Keep generated build artifacts out of commits unless explicitly preparing release artifacts.

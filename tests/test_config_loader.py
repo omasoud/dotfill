@@ -50,7 +50,6 @@ display_name = "Example"
 token_var = "EXAMPLE_TOKEN"
 token_url = "https://service.example.com/{WORK_USER}/tokens"
 test_url = "https://service.example.com/me"
-auth = "bearer"
 icon = "key"
 
 [import_aliases.OLD_EXAMPLE_TOKEN]
@@ -85,6 +84,8 @@ def test_loads_only_common_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert cfg.identities["WORK_EMAIL"].compare == "exact"
     assert cfg.derived_variables["WORK_USERNAME"].display == "plain"
     assert cfg.derived_variables["WORK_USERNAME"].compare == "exact"
+    assert cfg.services["EXAMPLE"].auth.kind == "bearer"
+    assert cfg.services["EXAMPLE"].test_headers == {}
 
 
 def test_loads_only_user_config(tmp_path: Path) -> None:
@@ -343,14 +344,213 @@ test_url = "https://example.com/me"
         load_effective_config(_context(tmp_path))
 
 
-def test_unsupported_auth_raises(tmp_path: Path) -> None:
+def test_scalar_auth_raises(tmp_path: Path) -> None:
     _write(
         tmp_path / "config.toml",
-        _base_config().replace('auth = "bearer"', 'auth = "basic"'),
+        _base_config().replace('icon = "key"', 'auth = "bearer"\nicon = "key"'),
     )
 
-    with pytest.raises(ConfigSchemaError, match="unsupported auth"):
+    with pytest.raises(ConfigSchemaError, match="expected table"):
         load_effective_config(_context(tmp_path))
+
+
+def test_service_auth_and_static_headers_load(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "config.toml",
+        _base_config()
+        + """
+
+[services.HEADER_AUTH]
+display_name = "Header Auth"
+token_var = "HEADER_AUTH_TOKEN"
+token_url = "https://example.com/token"
+test_url = "https://example.com/me"
+
+[services.HEADER_AUTH.auth]
+kind = "header"
+header = "x-api-key"
+
+[services.HEADER_AUTH.test_headers]
+anthropic-version = "2023-06-01"
+
+[services.BASIC_AUTH]
+display_name = "Basic Auth"
+token_var = "BASIC_AUTH_TOKEN"
+token_url = "https://example.com/token"
+test_url = "https://example.com/me"
+
+[services.BASIC_AUTH.auth]
+kind = "basic"
+username_identity = "WORK_EMAIL"
+
+[services.LITERAL_BASIC]
+display_name = "Literal Basic"
+token_var = "LITERAL_BASIC_TOKEN"
+token_url = "https://example.com/token"
+test_url = "https://example.com/me"
+
+[services.LITERAL_BASIC.auth]
+kind = "basic"
+username = "fixed-user"
+""",
+    )
+
+    cfg = load_effective_config(_context(tmp_path))
+
+    assert cfg.services["HEADER_AUTH"].auth.kind == "header"
+    assert cfg.services["HEADER_AUTH"].auth.header == "x-api-key"
+    assert cfg.services["HEADER_AUTH"].test_headers == {
+        "anthropic-version": "2023-06-01"
+    }
+    assert cfg.services["BASIC_AUTH"].auth.kind == "basic"
+    assert cfg.services["BASIC_AUTH"].auth.username_identity == "WORK_EMAIL"
+    assert cfg.services["LITERAL_BASIC"].auth.username == "fixed-user"
+
+
+@pytest.mark.parametrize(
+    ("auth_body", "message"),
+    [
+        ("kind = \"query\"", "query auth is not supported"),
+        ("kind = \"unknown\"", "unsupported auth kind"),
+        ("kind = \"bearer\"\nheader = \"x-api-key\"", "unknown field"),
+        ("kind = \"header\"", "header"),
+        ("kind = \"header\"\nheader = \"bad header\"", "invalid HTTP header name"),
+        ("kind = \"basic\"", "exactly one"),
+        ("kind = \"basic\"\nusername = \"u\"\nusername_identity = \"WORK_EMAIL\"", "exactly one"),
+        ("kind = \"basic\"\nusername = \"bad:user\"", "must not contain"),
+        ("kind = \"basic\"\nusername_identity = \"UNKNOWN\"", "unknown or disabled"),
+    ],
+)
+def test_invalid_service_auth_raises(
+    auth_body: str,
+    message: str,
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path / "config.toml",
+        _base_config()
+        + f"""
+
+[services.EXAMPLE.auth]
+{auth_body}
+""",
+    )
+
+    with pytest.raises(ConfigSchemaError, match=message):
+        load_effective_config(_context(tmp_path))
+
+
+@pytest.mark.parametrize(
+    ("headers_body", "message"),
+    [
+        ("bad_header = \"\"", "non-empty string"),
+        ("\"bad header\" = \"value\"", "invalid HTTP header name"),
+        ("X-Test = \"one\"\nx-test = \"two\"", "duplicate header"),
+    ],
+)
+def test_invalid_service_test_headers_raise(
+    headers_body: str,
+    message: str,
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path / "config.toml",
+        _base_config()
+        + f"""
+
+[services.EXAMPLE.test_headers]
+{headers_body}
+""",
+    )
+
+    with pytest.raises(ConfigSchemaError, match=message):
+        load_effective_config(_context(tmp_path))
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        """
+[services.EXAMPLE.test_headers]
+Authorization = "something"
+""",
+        """
+[services.EXAMPLE.auth]
+kind = "header"
+header = "x-api-key"
+
+[services.EXAMPLE.test_headers]
+X-API-Key = "something"
+""",
+    ],
+)
+def test_auth_header_conflicting_static_header_raises(
+    body: str,
+    tmp_path: Path,
+) -> None:
+    _write(tmp_path / "config.toml", _base_config() + body)
+
+    with pytest.raises(ConfigSchemaError, match="conflicts"):
+        load_effective_config(_context(tmp_path))
+
+
+def test_auth_table_replaces_inherited_auth_table(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "config_common.toml",
+        _base_config()
+        + """
+
+[services.EXAMPLE.auth]
+kind = "basic"
+username_identity = "WORK_EMAIL"
+""",
+    )
+    _write(
+        tmp_path / "config.toml",
+        """
+version = 1
+
+[services.EXAMPLE.auth]
+kind = "header"
+header = "x-api-key"
+""".strip(),
+    )
+
+    cfg = load_effective_config(_context(tmp_path))
+
+    auth = cfg.services["EXAMPLE"].auth
+    assert auth.kind == "header"
+    assert auth.header == "x-api-key"
+    assert auth.username_identity is None
+
+
+def test_test_headers_merge_case_insensitive_by_header_name(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "config_common.toml",
+        _base_config()
+        + """
+
+[services.EXAMPLE.test_headers]
+X-Trace = "common"
+X-Other = "keep"
+""",
+    )
+    _write(
+        tmp_path / "config.toml",
+        """
+version = 1
+
+[services.EXAMPLE.test_headers]
+x-trace = "user"
+""".strip(),
+    )
+
+    cfg = load_effective_config(_context(tmp_path))
+
+    assert cfg.services["EXAMPLE"].test_headers == {
+        "X-Other": "keep",
+        "x-trace": "user",
+    }
 
 
 @pytest.mark.parametrize(

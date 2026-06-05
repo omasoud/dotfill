@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from dotfill.config_models import AuthConfig
 from dotfill.config_paths import resolve_config_context
 from dotfill.errors import DuplicateManagedVariableError, UnresolvedIdentityError
 from dotfill.identity_facts import make_ad_facts
@@ -386,7 +387,8 @@ def test_cached_test_result_requires_matching_fingerprint(tmp_path: Path) -> Non
             service_id="EXAMPLE",
             token_var="EXAMPLE_TOKEN",
             resolved_test_url="https://service.example.com/me",
-            auth="bearer",
+            auth_config=AuthConfig(),
+            test_headers={},
             tls_verify=True,
             token="supersecrettoken",
             session_token=session.token,
@@ -416,7 +418,8 @@ def test_cached_test_result_ignored_when_test_url_changes(tmp_path: Path) -> Non
             service_id="EXAMPLE",
             token_var="EXAMPLE_TOKEN",
             resolved_test_url="https://service.example.com/me",
-            auth="bearer",
+            auth_config=AuthConfig(),
+            test_headers={},
             tls_verify=True,
             token="supersecrettoken",
             session_token=session.token,
@@ -442,6 +445,123 @@ test_url = "https://service.example.com/new-me"
 
     service = next(s for s in state.services if s.service_id == "EXAMPLE")
     assert service.resolved_test_url == "https://service.example.com/new-me"
+    assert service.test_status == "set"
+
+
+def test_cached_test_result_ignored_when_auth_config_changes(tmp_path: Path) -> None:
+    env = tmp_path / ".env"
+    env.write_text("EXAMPLE_TOKEN=supersecrettoken\n", encoding="utf-8")
+    config_root = tmp_path / "config"
+    _write_config(config_root, env_path=env)
+    session = _session()
+    session.test_results["EXAMPLE"] = DotfillTestResult(
+        status="working",
+        http_status=200,
+        fingerprint=service_test_fingerprint(
+            service_id="EXAMPLE",
+            token_var="EXAMPLE_TOKEN",
+            resolved_test_url="https://service.example.com/me",
+            auth_config=AuthConfig(),
+            test_headers={},
+            tls_verify=True,
+            token="supersecrettoken",
+            session_token=session.token,
+        ),
+    )
+    config_file = config_root / "config.toml"
+    config_file.write_text(
+        config_file.read_text(encoding="utf-8")
+        + """
+
+[services.EXAMPLE.auth]
+kind = "header"
+header = "x-api-key"
+""",
+        encoding="utf-8",
+    )
+
+    state = build_app_state(_context(config_root), session)
+
+    service = next(s for s in state.services if s.service_id == "EXAMPLE")
+    assert service.test_status == "set"
+
+
+def test_cached_test_result_ignored_when_static_headers_change(tmp_path: Path) -> None:
+    env = tmp_path / ".env"
+    env.write_text("EXAMPLE_TOKEN=supersecrettoken\n", encoding="utf-8")
+    config_root = tmp_path / "config"
+    _write_config(config_root, env_path=env)
+    session = _session()
+    session.test_results["EXAMPLE"] = DotfillTestResult(
+        status="working",
+        http_status=200,
+        fingerprint=service_test_fingerprint(
+            service_id="EXAMPLE",
+            token_var="EXAMPLE_TOKEN",
+            resolved_test_url="https://service.example.com/me",
+            auth_config=AuthConfig(),
+            test_headers={},
+            tls_verify=True,
+            token="supersecrettoken",
+            session_token=session.token,
+        ),
+    )
+    config_file = config_root / "config.toml"
+    config_file.write_text(
+        config_file.read_text(encoding="utf-8")
+        + """
+
+[services.EXAMPLE.test_headers]
+X-Test = "changed"
+""",
+        encoding="utf-8",
+    )
+
+    state = build_app_state(_context(config_root), session)
+
+    service = next(s for s in state.services if s.service_id == "EXAMPLE")
+    assert service.test_status == "set"
+
+
+def test_cached_test_result_ignored_when_basic_username_changes(tmp_path: Path) -> None:
+    env = tmp_path / ".env"
+    env.write_text(
+        "EXAMPLE_TOKEN=supersecrettoken\nWORK_EMAIL=bob@example.com\n",
+        encoding="utf-8",
+    )
+    config_root = tmp_path / "config"
+    _write_config(config_root, env_path=env)
+    config_file = config_root / "config.toml"
+    config_file.write_text(
+        config_file.read_text(encoding="utf-8")
+        + """
+
+[services.EXAMPLE.auth]
+kind = "basic"
+username_identity = "WORK_EMAIL"
+""",
+        encoding="utf-8",
+    )
+    session = _session()
+    session.test_results["EXAMPLE"] = DotfillTestResult(
+        status="working",
+        http_status=200,
+        fingerprint=service_test_fingerprint(
+            service_id="EXAMPLE",
+            token_var="EXAMPLE_TOKEN",
+            resolved_test_url="https://service.example.com/me",
+            auth_config=AuthConfig(kind="basic", username_identity="WORK_EMAIL"),
+            test_headers={},
+            tls_verify=True,
+            token="supersecrettoken",
+            session_token=session.token,
+            basic_username="alice@example.com",
+        ),
+    )
+
+    state = build_app_state(_context(config_root), session)
+
+    service = next(s for s in state.services if s.service_id == "EXAMPLE")
     assert service.test_status == "set"
 
 
