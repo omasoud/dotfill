@@ -16,7 +16,7 @@ dotfill is a generic local-only utility for maintaining configured token and ide
 - Preserve `.env` comments, blank lines, ordering, unrelated variables, unrelated duplicates, and line endings.
 - Write only after explicit user action.
 - Create at most one backup per process session before the first write.
-- Keep raw token values, dropped import values, Authorization headers, and full `.env` contents out of logs, API responses, and browser storage. Browser storage may contain only explicitly allowed non-secret UI preferences, such as the persisted color theme.
+- Keep raw token values, dropped import values, generated auth headers/credentials, and full `.env` contents out of logs, API responses, and browser storage. Browser storage may contain only explicitly allowed non-secret UI preferences, such as the persisted color theme.
 - Keep all UI assets local to the package.
 
 ## Non-Goals
@@ -27,7 +27,7 @@ dotfill is a generic local-only utility for maintaining configured token and ide
 - No automatic token validation except explicit Test actions.
 - No secret vault or token rotation policy engine.
 - No in-UI TOML editor in the current version.
-- No non-bearer service-test authentication in the current version.
+- No query-string service-test authentication in the current version.
 
 ## Target `.env`
 
@@ -85,9 +85,16 @@ Supported sections:
 - `[identities.<NAME>]`
 - `[derived.<VARIABLE>]`
 - `[services.<ID>]`
+- `[services.<ID>.auth]`
+- `[services.<ID>.test_headers]`
 - `[import_aliases.<SOURCE>]`
 
 All keyed items support `enabled = false`, which removes the inherited item from the effective config.
+
+Config tables merge recursively except `[services.<ID>.auth]`, which replaces
+as a unit when present in a later layer. `[services.<ID>.test_headers]` merges
+by case-insensitive header name, with later layers overriding earlier header
+values while preserving the later layer's configured casing.
 
 Identity and derived-variable definitions may include display/comparison
 metadata:
@@ -168,24 +175,65 @@ Each enabled service requires:
 
 Optional fields:
 
-- `auth = "bearer"`
+- `[services.<ID>.auth]`, defaulting to bearer when omitted
+- `[services.<ID>.test_headers]`, defaulting to no extra headers
 - `tls_verify = true`
 - `icon = "key"`
 
+If `auth` is present, it must be a table. Scalar `auth = "bearer"` and other
+scalar auth values are invalid. Supported auth table shapes are:
+
+```toml
+[services.SERVICE.auth]
+kind = "bearer"
+```
+
+```toml
+[services.SERVICE.auth]
+kind = "header"
+header = "x-api-key"
+```
+
+```toml
+[services.SERVICE.auth]
+kind = "basic"
+username_identity = "WORK_EMAIL"
+```
+
+```toml
+[services.SERVICE.auth]
+kind = "basic"
+username = "literal-user"
+```
+
+`kind = "query"` is intentionally unsupported until redacted URL handling is
+implemented and tested.
+
+Service auth validation must reject unknown auth kinds, unknown fields for the
+selected kind, missing required fields, invalid HTTP header names,
+case-insensitive duplicate `test_headers`, auth-generated header conflicts
+with `test_headers`, basic auth with both or neither username source, basic
+literal usernames containing `:`, and `username_identity` references to
+unknown or disabled identities.
+
 Service tests:
 
-- use `Authorization: Bearer <token>`;
-- send `Accept: application/json`;
+- support bearer, header API-key, and basic auth request construction;
+- send `Accept: application/json` unless a configured static header overrides it;
+- include configured static `test_headers` for any auth kind;
 - verify TLS by default;
 - classify 2xx responses as working;
 - classify 401/403 responses as authentication failures;
 - store cached test status only in process memory;
-- reuse cached status only when the service-test fingerprint still matches.
+- reuse cached status only when the service-test fingerprint still matches;
+- include normalized auth config, static test headers, TLS settings, resolved
+  test URL, session-scoped token digest, and any resolved basic username
+  material in the service-test fingerprint without storing raw secrets;
 - report service-test success and failure through the configured logger/console
   with service ID, HTTP status when available, and non-secret error context;
 - keep service-test logs secret-safe in normal and `--verbose` modes;
 - allow `--verbose` to show additional server/client/debug logging context;
-- import-screen service tests may test unsaved scan candidate values by scan ID, source key, and selected target, but must not write the target `.env` or update the saved-token service-test cache.
+- import-screen service tests may test unsaved scan candidate values by scan ID, source key, and selected target using the configured service auth mode, but must not write the target `.env` or update the saved-token service-test cache.
 
 ## Import Requirements
 

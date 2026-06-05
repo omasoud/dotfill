@@ -93,6 +93,9 @@ The merge is deterministic:
 
 - scalar values override;
 - tables merge by key;
+- `[services.<ID>.auth]` replaces as a unit when present in a later layer;
+- `[services.<ID>.test_headers]` merges by case-insensitive header name, with
+  later layers overriding earlier header values;
 - `enabled = false` removes inherited services, identities, derived variables, and aliases after merge.
 
 Validation happens after merge and disable semantics.
@@ -108,7 +111,7 @@ case normalization on write.
 
 Service token values are always masked in user-facing output and always compare
 exactly. Service definitions do not expose configurable display or comparison
-metadata.
+metadata, but do carry service-test auth configuration and static test headers.
 
 ## Domain Models
 
@@ -118,6 +121,7 @@ Config models live in `config_models.py`:
 - `IdentityDetectorConfig`
 - `IdentityDefinition`
 - `DerivedVariableDefinition`
+- `AuthConfig`
 - `ServiceDefinition`
 - `ImportAliasDefinition`
 - `EffectiveConfig`
@@ -237,16 +241,41 @@ normal service-test logger/console path rather than row tooltips.
 
 ## Service Test Design
 
-Only bearer auth is implemented.
+Service-test auth is configured per service. Omitted auth defaults to bearer,
+but a present `auth` value must be a table; scalar auth values are invalid.
 
-`run_service_test` sends:
+Supported auth kinds:
 
-```http
-Authorization: Bearer <token>
-Accept: application/json
-```
+- `bearer`: sends `Authorization: Bearer <token>`.
+- `header`: sends the token in the configured HTTP header.
+- `basic`: sends `Authorization: Basic <base64(username:token)>`, where the
+  username comes from either a literal `username` or a resolved
+  `username_identity`.
+
+`kind = "query"` is not supported until redacted URL handling is implemented
+and tested.
+
+`run_service_test` prepares a request centrally:
+
+- start with `Accept: application/json`;
+- apply configured static `test_headers`;
+- add the auth-generated header for bearer, header, or basic auth;
+- reject static header conflicts with auth-generated headers
+  case-insensitively during config validation;
+- resolve basic `username_identity` at test time using current identity state.
+
+An unresolved basic `username_identity` fails only that service test with
+non-secret error context; it does not block dashboard state construction unless
+the same identity is also required by a derived variable, service URL template,
+or dependent identity rule.
 
 TLS verification defaults to enabled. `tls_verify = false` must be explicit in TOML.
+
+The service-test fingerprint is non-secret and session-scoped. It includes the
+service ID, token variable, resolved test URL, TLS setting, normalized auth
+configuration, normalized static test headers, a session-scoped token digest,
+and a session-scoped digest of the resolved basic username when basic auth uses
+identity-derived or literal username material.
 
 Status classification:
 
@@ -367,9 +396,10 @@ Domain errors derive from `DotfillError` and are mapped to non-secret JSON respo
 Never expose:
 
 - raw token values;
-- Authorization headers;
+- generated auth headers or credentials, including Authorization, configured
+  API-key headers, and Basic-encoded credentials;
 - dropped source contents;
-- full `.env` contents.
+- full `.env` contents;
 - session tokens in browser storage.
 
 Masked token values, masked import previews, and configured masked
