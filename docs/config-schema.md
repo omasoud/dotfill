@@ -244,8 +244,30 @@ kind = "bearer"
 | `[services.<ID>.auth]` | no | Auth table for service testing. Omitted auth defaults to bearer. |
 | `[services.<ID>.test_headers]` | no | Static non-secret headers to include in service tests. |
 | `tls_verify` | no | Defaults to `true`. |
-| `icon` | no | Frontend icon key; fallback is `key`. |
+| `icon` | no | Service icon key. Defaults to `key` when omitted. |
 | `enabled` | no | Defaults to `true`; `false` removes the service. |
+
+Supported service icon keys:
+
+```text
+key
+ticket
+book
+git-branch
+package
+cloud
+brand-github
+brand-gitlab
+server
+database
+terminal
+shield
+search
+globe
+lock
+```
+
+Unknown service icon keys are config errors.
 
 URL templates may reference enabled identities with `{IDENTITY_NAME}` placeholders.
 

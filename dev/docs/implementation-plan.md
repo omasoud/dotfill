@@ -63,6 +63,12 @@ This document records the current implementation state, verification expectation
 - [x] Dashboard shows target `.env` path as the primary path and config directory inside a collapsed `dotfill config` disclosure.
 - [x] Dashboard includes a persisted light/dark mode toggle.
 - [x] Browser tabs use a local package favicon instead of the browser default.
+- [x] Service icon config values are validated against a public service icon
+      registry and unknown icon names are rejected during config loading.
+- [x] The bundled SVG sprite contains public service icons and private UI
+      control symbols without making every sprite symbol service-configurable.
+- [x] Frontend icon rendering falls back to the `key` symbol if a referenced
+      SVG symbol is unavailable.
 - [x] Dashboard supports empty generic state when no services, identities, or derived variables are configured.
 
 ## Verification Matrix
@@ -92,6 +98,7 @@ Focused verification areas:
 - [x] CLI commands and stable entrypoint behavior.
 - [x] Frontend static checks for no secret browser storage and generic bundled assets.
 - [x] Frontend theme preference and import-test state helper behavior.
+- [x] Public service icon registry validation and bundled sprite alignment.
 - [x] Build artifact inspection includes static assets such as `app.js`, `app.css`, and helper modules.
 
 
@@ -299,6 +306,45 @@ or weakening secret boundaries. Query-string auth remains deferred.
 - [x] After implementation, update current-status and verification checklists
       to mark bearer/header/basic auth and static service test headers as
       implemented.
+
+## Implemented: Public Service Icon Registry
+
+Goal: make service icons a documented, validated config contract while keeping
+the frontend sprite local, small, and separate from private UI-control symbols.
+
+- [x] Add `src/dotfill/icons.py` with `DEFAULT_SERVICE_ICON = "key"` and the
+      public `SERVICE_ICON_KEYS` registry:
+      `key`, `ticket`, `book`, `git-branch`, `package`, `cloud`,
+      `brand-github`, `brand-gitlab`, `server`, `database`, `terminal`,
+      `shield`, `search`, `globe`, and `lock`.
+- [x] Update `resolver.py` to import `DEFAULT_SERVICE_ICON` from `icons.py` so
+      the default service icon is defined beside the public registry.
+- [x] Update `config_loader.py` to validate optional
+      `services.<ID>.icon` values against `SERVICE_ICON_KEYS`; omitted icons
+      continue to resolve to `DEFAULT_SERVICE_ICON`, and unknown values raise a
+      `ConfigSchemaError` naming the bad value and valid keys.
+- [x] Add bundled Tabler-style SVG symbols in `static/index.html` for the new
+      public service icons that are not already present: `server`, `database`,
+      `terminal`, `shield`, `search`, `globe`, and `lock`.
+- [x] Keep private UI symbols such as `arrow-left`, `arrow-right`, `check`,
+      `x`, `alert`, `refresh`, `cloud-upload`, `sun`, and `moon` out of
+      `SERVICE_ICON_KEYS`.
+- [x] Update the frontend `icon()` helper in `static/app.js` to check for
+      `document.getElementById("ic-<name>")` and fall back to `ic-key` when a
+      referenced symbol is unavailable; this is only a render-time guard, not
+      the config validation source of truth.
+- [x] Add config-loader tests for a valid newly added icon, omitted-icon
+      default behavior, and unknown-icon `ConfigSchemaError` messaging.
+- [x] Add static asset tests that parse `static/index.html` for `ic-*` symbols
+      and assert every `SERVICE_ICON_KEYS` entry has a matching symbol, without
+      requiring every sprite symbol to be service-configurable.
+- [x] Add or update frontend/static tests proving the icon helper includes the
+      missing-symbol fallback path.
+- [x] Update `docs/config-schema.md` to publish the supported service icon
+      keys and state that unknown names are config errors; refresh README or
+      getting-started examples only if their icon wording becomes incomplete.
+- [x] Run focused verification with `uv run pytest tests/test_config_loader.py
+      tests/test_static_assets.py`, then run the full `uv run pytest` suite.
 
 ## Future Roadmap
 

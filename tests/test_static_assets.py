@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
+
+from dotfill.icons import SERVICE_ICON_KEYS
 
 
 STATIC_DIR = Path(__file__).resolve().parents[1] / "src" / "dotfill" / "static"
@@ -12,6 +15,11 @@ def _static_text() -> str:
     return "\n".join(
         path.read_text(encoding="utf-8") for path in sorted(STATIC_DIR.glob("*.*"))
     )
+
+
+def _sprite_icon_keys() -> set[str]:
+    index_text = STATIC_DIR.joinpath("index.html").read_text(encoding="utf-8")
+    return set(re.findall(r'id="ic-([^"]+)"', index_text))
 
 
 def test_frontend_browser_storage_is_limited_to_theme_preference() -> None:
@@ -97,3 +105,35 @@ def test_frontend_uses_local_svg_favicon() -> None:
     assert '<link rel="icon" type="image/svg+xml" href="/favicon.svg">' in index_text
     assert 'viewBox="0 0 32 32"' in favicon_text
     assert "stroke=" in favicon_text
+
+
+def test_public_service_icons_have_bundled_sprite_symbols() -> None:
+    sprite_keys = _sprite_icon_keys()
+
+    assert SERVICE_ICON_KEYS <= sprite_keys
+
+
+def test_private_ui_symbols_are_not_public_service_icons() -> None:
+    private_ui_symbols = {
+        "alert",
+        "arrow-left",
+        "arrow-right",
+        "check",
+        "cloud-upload",
+        "moon",
+        "refresh",
+        "sun",
+        "x",
+    }
+
+    assert private_ui_symbols <= _sprite_icon_keys()
+    assert SERVICE_ICON_KEYS.isdisjoint(private_ui_symbols)
+
+
+def test_frontend_icon_helper_falls_back_for_missing_symbols() -> None:
+    app_text = STATIC_DIR.joinpath("app.js").read_text(encoding="utf-8")
+
+    assert 'const requested = name || "key";' in app_text
+    assert "document.getElementById(`ic-${requested}`)" in app_text
+    assert 'const safe = document.getElementById(`ic-${requested}`) ? requested : "key";' in app_text
+    assert 'u.setAttribute("href", `#ic-${safe}`);' in app_text

@@ -26,6 +26,7 @@ from .config_models import (
 from .config_paths import ConfigContext
 from .envdoc import is_valid_var_name
 from .errors import ConfigLoadError, ConfigSchemaError
+from .icons import SERVICE_ICON_KEYS
 
 SUPPORTED_VERSION = 1
 SUPPORTED_IDENTITY_SOURCES = {
@@ -295,6 +296,7 @@ def _build_services(
             test_headers=test_headers,
         )
         icon = _optional_str(section, "icon", f"services.{service_id}.icon")
+        _validate_service_icon(icon, f"services.{service_id}.icon")
         tls_verify = _optional_bool(
             section, "tls_verify", f"services.{service_id}.tls_verify", default=True
         )
@@ -510,6 +512,13 @@ def _validate_url_placeholders(
 def _validate_http_header_name(name: str, path: str) -> None:
     if not _HTTP_HEADER_NAME_RE.fullmatch(name):
         raise ConfigSchemaError(f"{path}: invalid HTTP header name")
+
+
+def _validate_service_icon(icon: str | None, path: str) -> None:
+    if icon is None or icon in SERVICE_ICON_KEYS:
+        return
+    valid = ", ".join(sorted(SERVICE_ICON_KEYS))
+    raise ConfigSchemaError(f"{path}: unknown icon {icon!r} (valid: {valid})")
 
 
 def _resolve_configured_path(value: str) -> Path:

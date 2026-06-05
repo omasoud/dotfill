@@ -14,6 +14,7 @@ from .config_models import AuthConfig, EffectiveConfig, ServiceDefinition
 from .config_paths import ConfigContext, resolve_config_context
 from .envdoc import EnvDocument
 from .errors import DuplicateManagedVariableError, UnresolvedIdentityError
+from .icons import DEFAULT_SERVICE_ICON
 from .identity import detect_ad_facts, resolve_primary_identity
 from .identity_facts import ADFacts
 from .identity_rules import IdentityRuleResult, evaluate_identity_rules
@@ -27,8 +28,6 @@ from .models import (
 )
 from .paths import default_env_path
 from .value_policy import mask_value, values_equal
-
-DEFAULT_SERVICE_ICON = "key"
 
 
 def _mask_token(value: str) -> str:

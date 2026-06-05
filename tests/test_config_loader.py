@@ -9,6 +9,8 @@ import pytest
 from dotfill.config_loader import load_effective_config
 from dotfill.config_paths import ConfigContext
 from dotfill.errors import ConfigLoadError, ConfigSchemaError
+from dotfill.icons import DEFAULT_SERVICE_ICON
+from dotfill.resolver import service_icon
 
 
 def _context(config_dir: Path) -> ConfigContext:
@@ -218,6 +220,42 @@ tls_verify = false
     assert service.display_name == "User Example"
     assert service.token_var == "EXAMPLE_TOKEN"
     assert service.tls_verify is False
+
+
+def test_service_icon_accepts_public_service_icon_key(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "config.toml",
+        _base_config().replace('icon = "key"', 'icon = "server"'),
+    )
+
+    cfg = load_effective_config(_context(tmp_path))
+
+    assert cfg.services["EXAMPLE"].icon == "server"
+
+
+def test_omitted_service_icon_resolves_to_default(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "config.toml",
+        _base_config().replace('icon = "key"\n', ""),
+    )
+
+    cfg = load_effective_config(_context(tmp_path))
+
+    assert cfg.services["EXAMPLE"].icon is None
+    assert service_icon(cfg.services["EXAMPLE"].icon) == DEFAULT_SERVICE_ICON
+
+
+def test_unknown_service_icon_raises(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "config.toml",
+        _base_config().replace('icon = "key"', 'icon = "rocket"'),
+    )
+
+    with pytest.raises(
+        ConfigSchemaError,
+        match=r"services\.EXAMPLE\.icon: unknown icon 'rocket'",
+    ):
+        load_effective_config(_context(tmp_path))
 
 
 def test_enabled_false_disables_inherited_items(tmp_path: Path) -> None:

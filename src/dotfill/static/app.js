@@ -34,11 +34,13 @@ let activeTheme = applyTheme(resolveInitialTheme());
 const $ = (sel, root = document) => root.querySelector(sel);
 
 function icon(name, klass = "icon") {
+  const requested = name || "key";
+  const safe = document.getElementById(`ic-${requested}`) ? requested : "key";
   const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   s.setAttribute("class", klass);
   s.setAttribute("aria-hidden", "true");
   const u = document.createElementNS("http://www.w3.org/2000/svg", "use");
-  u.setAttribute("href", `#ic-${name}`);
+  u.setAttribute("href", `#ic-${safe}`);
   s.appendChild(u);
   return s;
 }
