@@ -33,6 +33,7 @@ src/dotfill/
   entrypoints.py
   envdoc.py
   errors.py
+  icons.py
   identity.py
   identity_facts.py
   identity_rules.py
@@ -112,6 +113,35 @@ case normalization on write.
 Service token values are always masked in user-facing output and always compare
 exactly. Service definitions do not expose configurable display or comparison
 metadata, but do carry service-test auth configuration and static test headers.
+
+Service icons are configured by public service icon keys. The service icon
+registry lives in `icons.py` and is the config contract:
+
+```python
+DEFAULT_SERVICE_ICON = "key"
+
+SERVICE_ICON_KEYS = {
+    "key",
+    "ticket",
+    "book",
+    "git-branch",
+    "package",
+    "cloud",
+    "brand-github",
+    "brand-gitlab",
+    "server",
+    "database",
+    "terminal",
+    "shield",
+    "search",
+    "globe",
+    "lock",
+}
+```
+
+Config validation rejects `services.<ID>.icon` values outside
+`SERVICE_ICON_KEYS` with a `ConfigSchemaError`. Omitted service icons resolve to
+`DEFAULT_SERVICE_ICON`.
 
 ## Domain Models
 
@@ -334,9 +364,18 @@ FastAPI docs/OpenAPI routes are disabled.
 
 The frontend is static and package-local.
 
+All frontend icons and favicon assets are bundled with the package. dotfill
+does not fetch icon assets from CDNs or external icon packages at runtime.
+
 `index.html` links a local SVG favicon from the packaged static assets so
 browser tabs show a dotfill-specific icon. The favicon should use a compact
 token/key motif that remains legible at tab size.
+
+`index.html` also contains the inline SVG symbol sprite. Sprite symbols are
+implementation assets and may include both public service icons and private UI
+control symbols. UI-only symbols such as arrows, status marks, alerts, refresh,
+upload, and theme-toggle icons are not automatically valid
+`services.<ID>.icon` config values.
 
 Module memory holds:
 
@@ -361,6 +400,12 @@ The dashboard shows:
 - dynamic services;
 - empty service state;
 - session backup status.
+
+Service cards render the configured public service icon key. The frontend icon
+helper checks whether `ic-<name>` exists in the current document and falls back
+to `ic-key` when a symbol is missing. This fallback is defense-in-depth for
+asset drift; backend schema validation remains responsible for rejecting
+unknown configured service icon names.
 
 The selected color theme is applied on startup before rendering app content
 where practical. The theme preference persists across browser sessions and may
@@ -420,6 +465,9 @@ Core verification is pytest-based:
 - API auth, origin checks, and secret boundaries;
 - CLI and stable entrypoint behavior;
 - static frontend secret-storage and generic-string audits.
+- service icon registry validation, including every `SERVICE_ICON_KEYS` entry
+  having a matching `ic-*` symbol in the bundled sprite without requiring every
+  sprite symbol to be service-configurable.
 
 Packaging verification uses:
 

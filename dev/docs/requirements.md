@@ -180,6 +180,30 @@ Optional fields:
 - `tls_verify = true`
 - `icon = "key"`
 
+Service `icon` values are public service-config icon keys, not arbitrary SVG
+symbol IDs. Omitted `icon` defaults to `key`. Unknown service icon keys are
+configuration schema errors, not warnings.
+
+Supported service icon keys:
+
+```text
+key
+ticket
+book
+git-branch
+package
+cloud
+brand-github
+brand-gitlab
+server
+database
+terminal
+shield
+search
+globe
+lock
+```
+
 If `auth` is present, it must be a table. Scalar `auth = "bearer"` and other
 scalar auth values are invalid. Supported auth table shapes are:
 
@@ -340,7 +364,10 @@ When `locked_profile` is set:
 - Keep the target `.env` path visually primary.
 - Show config directory in a collapsed `dotfill config` disclosure, including profile directory when a profile is active.
 - Render dynamic identities, derived variables, and services.
-- Render service icons from configured icon keys with fallback `key`.
+- Render service icons from configured public service icon keys.
+- Fall back to the `key` icon if a referenced SVG symbol is unavailable at
+  render time; backend config validation remains the primary guard against
+  invalid icon names.
 - Use a local package favicon so browser tabs do not show the browser default icon.
 - Provide a light/dark mode toggle.
 - Persist the selected light/dark theme across browser sessions as a non-secret UI preference.
@@ -360,7 +387,7 @@ Run a profile wrapper or edit config.toml.
 ## Documentation Requirements
 
 - README describes generic TOML configuration, config locations, CLI usage, privacy, wrapper entrypoints, and links to user documentation under `docs/`.
-- User-facing `docs/config-schema.md` documents schema, merge rules, disable semantics, identity sources, identity/derived `display` and `compare`, import aliases, and `tls_verify`.
+- User-facing `docs/config-schema.md` documents schema, merge rules, disable semantics, identity sources, identity/derived `display` and `compare`, import aliases, `tls_verify`, and the supported service icon keys.
 - User-facing docs include getting-started and troubleshooting guidance.
 - Examples use neutral domains such as `example.com`.
 - Override-only `config.toml` examples include `version = 1`.
