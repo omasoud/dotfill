@@ -39,6 +39,7 @@ dotfill = "dotfill.entrypoints:main"
 [project.urls]
 Homepage = "https://github.com/omasoud/dotfill"
 Repository = "https://github.com/omasoud/dotfill"
+Security = "https://github.com/omasoud/dotfill/security/policy"
 Documentation = "https://github.com/omasoud/dotfill/tree/main/docs"
 Issues = "https://github.com/omasoud/dotfill/issues"
 

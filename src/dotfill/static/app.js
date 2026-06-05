@@ -49,18 +49,23 @@ function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
     if (k === "class") node.className = v;
-    else if (k === "html") node.innerHTML = v;
     else if (k.startsWith("on")) node.addEventListener(k.slice(2).toLowerCase(), v);
     else if (v === true) node.setAttribute(k, "");
     else if (v !== false && v !== null && v !== undefined) node.setAttribute(k, v);
   }
-  for (const child of children) {
-    if (child == null || child === false) continue;
-    if (Array.isArray(child)) child.forEach((c) => c && node.appendChild(c));
-    else if (typeof child === "string") node.appendChild(document.createTextNode(child));
-    else node.appendChild(child);
-  }
+  for (const child of children) appendChild(node, child);
   return node;
+}
+
+function appendChild(node, child) {
+  if (child == null || child === false) return;
+  if (Array.isArray(child)) {
+    child.forEach((c) => appendChild(node, c));
+  } else if (child instanceof Node) {
+    node.appendChild(child);
+  } else {
+    node.appendChild(document.createTextNode(String(child)));
+  }
 }
 
 async function api(method, path, body) {

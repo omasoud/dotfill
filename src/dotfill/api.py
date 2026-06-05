@@ -200,6 +200,39 @@ def _service_fingerprint(
     )
 
 
+def _read_import_source_path(raw_path: str) -> tuple[str, str]:
+    # Typed-path import intentionally reads an explicit local file selected by
+    # the session-authenticated localhost UI.
+    if raw_path.strip() == "":
+        raise HTTPException(status_code=400, detail="Import source path is required")
+    try:
+        path = Path(raw_path).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        log.warning("Import source path resolution failed: %s", exc)
+        raise HTTPException(
+            status_code=400,
+            detail="Import source file was not found",
+        ) from None
+    if not path.is_file():
+        raise HTTPException(
+            status_code=400,
+            detail="Import source path must be a file",
+        )
+    try:
+        return f"Selected file: {path.name}", path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(
+            status_code=400,
+            detail="Import source file must be UTF-8 text",
+        ) from None
+    except OSError as exc:
+        log.warning("Import source path read failed: %s", exc)
+        raise HTTPException(
+            status_code=400,
+            detail="Import source file could not be read",
+        ) from None
+
+
 def create_app(ctx: AppContext) -> FastAPI:
     app = FastAPI(title="dotfill", docs_url=None, redoc_url=None, openapi_url=None)
     api = APIRouter(prefix="/api")
@@ -359,15 +392,17 @@ def create_app(ctx: AppContext) -> FastAPI:
                 )
             except UrlTemplateError as exc:
                 ctx_in.session.test_results[svc_id] = TestResult(
-                    status="failed", error_message=str(exc)
+                    status="failed",
+                    error_message="Service test URL could not be resolved",
                 )
                 results.append(
                     {
                         "service_id": svc_id,
                         "status": "failed",
-                        "error_message": str(exc),
+                        "error_message": "Service test URL could not be resolved",
                     }
                 )
+                log.warning("Service test URL resolution failed for %s: %s", svc_id, exc)
                 continue
             result = run_service_test(
                 svc_def,
@@ -400,13 +435,10 @@ def create_app(ctx: AppContext) -> FastAPI:
         body: ScanPathRequest,
         ctx_in: AppContext = Depends(session_dep),
     ) -> dict[str, object]:
-        path = Path(body.path).expanduser()
-        if not path.exists():
-            raise HTTPException(status_code=400, detail=f"Path not found: {path}")
-        text = path.read_text(encoding="utf-8")
+        source_label, text = _read_import_source_path(body.path)
         state = _state(ctx_in)
         scan = scan_source_text(
-            source_label=str(path),
+            source_label=source_label,
             source_text=text,
             current_doc=state.env_doc,
             config=state.effective_config,

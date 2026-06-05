@@ -165,7 +165,7 @@ def test_service_transport_error() -> None:
     result = run_service_test(_svc(), service_id="EXAMPLE", resolved_test_url=url, token="tok")
     assert result.status == "failed"
     assert result.http_status is None
-    assert "boom" in (result.error_message or "")
+    assert result.error_message == "Service test transport error"
 
 
 def test_service_empty_token_raises() -> None:

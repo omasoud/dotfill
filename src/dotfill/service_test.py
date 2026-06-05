@@ -123,7 +123,10 @@ def run_service_test(
             service_id,
             exc,
         )
-        return TestResult(status="failed", error_message=str(exc))
+        return TestResult(
+            status="failed",
+            error_message="Service test transport error",
+        )
     finally:
         if owns_client:
             client.close()

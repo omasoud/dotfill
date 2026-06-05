@@ -717,7 +717,7 @@ def test_scan_path_endpoint(
     body = r.json()
     assert "scan_id" in body
     assert "rows" in body
-    assert body["source_label"] == str(source)
+    assert body["source_label"] == "Selected file: source.env"
     assert body["rows"][0]["source_key"] == "SERVICE_A_TOKEN"
     assert body["rows"][0]["status"] == "new"
 
@@ -731,6 +731,19 @@ def test_scan_path_not_found(
         json={"path": str(tmp_path / "nonexistent.env")},
     )
     assert r.status_code == 400
+    assert r.json()["detail"] == "Import source file was not found"
+
+
+def test_scan_path_directory_rejected(
+    client: TestClient, ctx: AppContext, tmp_path: Path
+) -> None:
+    r = client.post(
+        "/api/import/scan-path",
+        headers=_headers(ctx),
+        json={"path": str(tmp_path)},
+    )
+    assert r.status_code == 400
+    assert r.json()["detail"] == "Import source path must be a file"
 
 
 @respx.mock
