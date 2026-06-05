@@ -6,6 +6,27 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Release notes are grouped by version and category. Dates use the `YYYY-MM-DD`
 format.
 
+## [1.2.0] - 2026-06-05
+
+### Added
+
+- Added a practical security policy with supported-version and private
+  vulnerability reporting guidance.
+- Added a PyPI project metadata link to the repository security policy.
+
+### Changed
+
+- Hardened local API error responses so service-test transport and URL-template
+  failures do not expose raw exception details to the web UI.
+- Removed the typed-path import endpoint and UI flow. Import now uses browser
+  Browse or drag-and-drop file content instead of asking the localhost server to
+  read arbitrary paths.
+
+### Security
+
+- Addressed CodeQL findings for DOM XSS, path injection, and stack-trace
+  exposure in the local web UI and API.
+
 ## [1.1.0] - 2026-06-05
 
 ### Added
@@ -62,6 +83,7 @@ format.
   and web UI.
 - Added MIT licensing and PyPI publishing project metadata.
 
+[1.2.0]: https://github.com/omasoud/dotfill/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/omasoud/dotfill/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/omasoud/dotfill/compare/v0.3.0...v1.0.0
 [0.3.0]: https://github.com/omasoud/dotfill/compare/v0.2.0...v0.3.0
