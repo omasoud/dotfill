@@ -83,6 +83,80 @@ dotfill
 
 The dashboard should show the configured identity, derived variable, service, target `.env`, and collapsed dotfill config location.
 
+## Start from an existing `.env`
+
+If you already have a `.env`, you can use it as a map for your first
+`config.toml`. Work from a sanitized copy, not the real file:
+
+1. Copy the `.env` to a temporary file.
+2. Remove all API tokens, passwords, private keys, and other secret values.
+3. Redact private identity values unless you intentionally want to share them.
+4. Keep variable names and helpful non-secret comments.
+
+For example:
+
+```dotenv
+# GitHub personal access token
+GITHUB_TOKEN=<redacted>
+
+# Internal issue tracker token
+JIRA_API_TOKEN=
+
+WORK_EMAIL=<redacted>
+```
+
+You can then ask an AI coding agent to draft a config. A useful prompt is:
+
+```text
+Create a dotfill config.toml for my personal use from this sanitized .env.
+Use dotfill directly; do not create a wrapper package.
+Use only dotfill's public user docs:
+- README.md
+- docs/getting-started.md
+- docs/config-schema.md
+
+Treat API token variables as services using their existing variable names as
+token_var values. Treat stable non-secret user facts as identities. Use derived
+variables only when a value should be copied from an identity. Do not invent
+secret values. If token_url, test_url, auth kind, or required headers are
+unknown, use safe placeholders or TODO comments and point out what I need to
+review.
+
+Here is the sanitized .env:
+...
+```
+
+Review the generated TOML before using it. The agent can usually infer service
+names and token variable names, but you should verify:
+
+- `token_var` exactly matches the variable names in your real `.env`;
+- `token_url` points to the page where you create or manage that token;
+- `test_url` points to an endpoint that accepts the configured auth mode;
+- `[services.<ID>.auth]` matches the API, especially for header API-key or
+  basic auth services;
+- identities and derived variables do not expose values you want masked in the
+  dashboard or CLI;
+- import aliases map old variable names to the intended managed targets.
+
+Save the reviewed `config.toml` at the path printed by:
+
+```powershell
+dotfill config path --user
+```
+
+Then validate the config without opening the dashboard:
+
+```powershell
+dotfill status
+```
+
+When the status output looks right, point dotfill at your real `.env` if needed:
+
+```powershell
+dotfill --env-path C:\work\project\.env status
+dotfill --env-path C:\work\project\.env
+```
+
 ## Use profiles
 
 Profiles keep separate configs under `profiles/<name>` inside the config root:

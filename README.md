@@ -48,6 +48,22 @@ dotfill --config-root C:\tmp\dotfill-config --profile demo status
 dotfill --env-path C:\work\project\.env
 ```
 
+## First Config From An Existing `.env`
+
+For individual use, install `dotfill` directly and create your own
+`config.toml`. If you already have a `.env`, a practical first setup path is to
+make a copy, remove the secret values, then ask an AI coding agent to draft
+`config.toml` from the sanitized variable names using dotfill's public docs.
+
+Do not give API tokens or other secrets to the agent. Keep only variable names
+and non-secret comments, for example `GITHUB_TOKEN=` or
+`GITHUB_TOKEN=<redacted>`. Review the generated service URLs, test URLs, auth
+mode, identities, and derived variables before using the config against your
+real `.env`.
+
+See [Getting started](docs/getting-started.md) for a suggested prompt and
+review checklist.
+
 ## Documentation
 
 - [Getting started](docs/getting-started.md) walks through the first config and dashboard run.
