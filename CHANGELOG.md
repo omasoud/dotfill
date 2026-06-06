@@ -6,6 +6,25 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Release notes are grouped by version and category. Dates use the `YYYY-MM-DD`
 format.
 
+## [1.3.0] - 2026-06-06
+
+### Added
+
+- Added dashboard actions and a guarded API path to fill missing derived
+  variables or reset diverged derived variables to their computed defaults.
+- Added import-commit fill-in behavior for missing derived variables when a
+  computed default is available.
+- Added user-facing guidance for creating a first `config.toml` from a
+  sanitized existing `.env` file with help from an AI coding agent.
+- Added README guidance and a public example-repo link for wrapper-package use
+  cases.
+
+### Changed
+
+- Clarified identity and derived variable states in maintainer documentation.
+- Improved dashboard state refresh handling so a successful refresh clears a
+  previous load error.
+
 ## [1.2.0] - 2026-06-05
 
 ### Added
@@ -83,6 +102,7 @@ format.
   and web UI.
 - Added MIT licensing and PyPI publishing project metadata.
 
+[1.3.0]: https://github.com/omasoud/dotfill/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/omasoud/dotfill/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/omasoud/dotfill/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/omasoud/dotfill/compare/v0.3.0...v1.0.0
