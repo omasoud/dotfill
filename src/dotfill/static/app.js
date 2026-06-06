@@ -111,9 +111,11 @@ async function bootstrap() {
   appVersion = data.version || "";
 }
 
-async function loadState() {
+async function loadState(options = {}) {
+  const clearError = options.clearError !== false;
   try {
     state = await api("GET", "/api/state");
+    if (clearError) showError("");
     render();
   } catch (e) {
     showError(`Failed to load state: ${e.message}`);
@@ -416,7 +418,7 @@ async function testOne(serviceId) {
     await loadState();
   } catch (e) {
     showError(`Test failed: ${e.message}`);
-    await loadState();
+    await loadState({ clearError: false });
   }
 }
 
@@ -446,7 +448,7 @@ async function testAll() {
     await loadState();
   } catch (e) {
     showError(`Test all failed: ${e.message}`);
-    await loadState();
+    await loadState({ clearError: false });
   }
 }
 
