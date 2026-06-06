@@ -214,25 +214,53 @@ Identity rules map config to values. Supported sources:
 
 Identity state source values are:
 
-- `detected`
-- `aligned`
-- `diverged`
-- `unresolved`
+- `detected`: no explicit non-empty `.env` value exists, and the configured
+  source resolved a value.
+- `aligned`: an explicit non-empty `.env` value exists and matches the
+  detected value under the identity comparison mode.
+- `diverged`: an explicit non-empty `.env` value exists and differs from the
+  detected value under the identity comparison mode.
+- `unresolved`: neither an explicit non-empty `.env` value nor a detected value
+  is available.
 
 Identity aligned/diverged decisions use the configured identity comparison mode.
 When values are equivalent under `casefold`, the state is `aligned` and the
-explicit value remains the effective value.
+explicit value remains the effective value. Explicit non-empty `.env` identity
+values remain the effective values for both aligned and diverged identities.
 
 dotfill reads configured identity variables as explicit overrides but never writes identity variables automatically.
 
 ## Derived Variable Design
 
 Derived variables copy effective identity values into configured `.env`
-variables only as part of explicit token-save flows.
+variables through constrained write flows:
+
+- token saves automatically fill missing or empty enabled derived variables
+  when a computed default is available;
+- import commits automatically fill missing or empty enabled derived variables
+  when a computed default is available, unless the import explicitly maps a
+  source value to the same derived variable;
+- dashboard row actions may explicitly write a computed default for missing or
+  diverged derived variables.
+
+Derived state values are:
+
+- `missing`: the configured derived variable is absent or empty in the target
+  `.env`, and the computed default is available.
+- `aligned`: the current non-empty `.env` value matches the computed default
+  under the derived comparison mode.
+- `diverged`: the current non-empty `.env` value differs from the computed
+  default under the derived comparison mode.
 
 Derived aligned/diverged decisions use the configured derived comparison mode.
 When values are equivalent under `casefold`, the state is `aligned`; dotfill
 does not rewrite a non-empty current value just to normalize casing.
+
+Automatic token-save and import-fill behavior must not overwrite non-empty
+derived values. Diverged derived values are preserved unless the user explicitly
+chooses the row-level default action. Disabled derived variables are absent from
+derived state and are never written. Derived variables whose source identity is
+unresolved are not eligible for automatic fill or explicit reset.
 
 ## `.env` Document Design
 

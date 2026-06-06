@@ -132,11 +132,17 @@ Windows AD detection returns generic facts only. It does not map facts to organi
 
 Resolution model:
 
-- Explicit non-empty `.env` value wins.
-- Explicit matching detected value is `aligned`.
-- Explicit differing detected value is `diverged`.
-- Detected value with no explicit value is `detected`.
-- Missing explicit and detected values are `unresolved`.
+- `detected`: no explicit non-empty `.env` value exists, and the configured
+  source resolved a value.
+- `aligned`: an explicit non-empty `.env` value exists and matches the
+  detected value under the identity comparison mode.
+- `diverged`: an explicit non-empty `.env` value exists and differs from the
+  detected value under the identity comparison mode.
+- `unresolved`: neither an explicit non-empty `.env` value nor a detected value
+  is available.
+
+Explicit non-empty `.env` values win for effective identity values, including
+when the identity is `aligned` or `diverged`.
 
 Identity equality uses the identity definition's `compare` mode. With
 `compare = "casefold"`, explicit and detected values that differ only by
@@ -155,8 +161,29 @@ Rules:
 
 - `from_identity` must reference an enabled identity.
 - Missing or empty enabled derived variables are filled on token saves.
-- Existing non-empty derived values are preserved.
+- Missing or empty enabled derived variables are filled on import commits when
+  a computed default is available. If the import explicitly maps a source value
+  to the same derived variable, the explicit import value wins.
+- Existing non-empty derived values are preserved during automatic token-save
+  and import-fill behavior.
+- Existing non-empty derived values may be reset to the computed default only
+  through an explicit row-level user action.
 - Disabled derived variables are not filled or written.
+
+Derived state values are:
+
+- `missing`: the configured derived variable is absent or empty in the target
+  `.env`, and the computed default is available.
+- `aligned`: the current non-empty `.env` value matches the computed default
+  under the derived comparison mode.
+- `diverged`: the current non-empty `.env` value differs from the computed
+  default under the derived comparison mode.
+
+Disabled derived variables do not appear in derived state. A derived variable
+whose source identity is unresolved is not eligible for automatic fill or
+explicit reset; unresolved identities fail state construction only when required
+by enabled derived variables, service URL templates, or dependent identity
+rules.
 
 Derived equality uses the derived definition's `compare` mode. With
 `compare = "casefold"`, current and computed values that differ only by
