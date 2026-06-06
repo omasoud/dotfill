@@ -144,7 +144,16 @@ When no services are configured, the dashboard shows an empty generic state.
 
 ## Wrapper Packages
 
-Wrapper packages can provide managed `config_common.toml` content and launch dotfill through:
+Wrapper packages are for sharing baked-in dotfill defaults with other people.
+For example, a team wrapper can provide managed `config_common.toml` content so
+teammates get the same services, token variable names, identity rules, import
+aliases, and profile policy without each person hand-writing the same TOML.
+
+If you are using dotfill only for yourself, you usually do not need a wrapper.
+Install `dotfill` directly and create your own `config.toml`, profiles,
+services, identities, and aliases.
+
+Wrappers launch dotfill through:
 
 ```python
 from dotfill.entrypoints import run_dotfill
@@ -161,6 +170,9 @@ Use `locked_profile` when the wrapper command should always mean one profile.
 Use `default_profile` only when CLI `--profile` or `DOTFILL_PROFILE` should be
 allowed to select another profile. Wrappers should not import the Typer app
 directly. User overrides remain in `config.toml`.
+
+For a complete sample wrapper repo, see
+[dotfill-wrapper-example](https://github.com/omasoud/dotfill-wrapper-example).
 
 ## Development
 
