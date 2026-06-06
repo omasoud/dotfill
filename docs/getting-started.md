@@ -114,7 +114,7 @@ Open the dashboard with:
 dotfill
 ```
 
-Use the service card to paste and save a token. Missing enabled derived variables are filled during token saves. Identity variables are read as explicit overrides when present, but dotfill does not write identity variables automatically.
+Use the service card to paste and save a token. Missing enabled derived variables are filled during token saves, and the dashboard can fill or reset individual derived variables to their computed defaults. Identity variables are read as explicit overrides when present, but dotfill does not write identity variables automatically.
 
 Service tests support configured bearer, header API-key, and basic auth requests to the configured `test_url` after explicit user action.
 
@@ -125,7 +125,7 @@ The import workflow can scan:
 - a file selected with Browse;
 - a dropped file.
 
-Import responses show masked values only. Empty source values are skipped. Import targets are enabled service token variables and enabled derived variables; identity variables are not import targets.
+Import responses show masked values only. Empty source values are skipped. Import targets are enabled service token variables and enabled derived variables; identity variables are not import targets. Import commits also fill missing enabled derived variables when dotfill can compute their defaults.
 
 ## More reference
 

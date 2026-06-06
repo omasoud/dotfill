@@ -144,6 +144,15 @@ function derivedBadge(status) {
   return el("span", { class: `badge badge-${klass}` }, label);
 }
 
+async function writeDerivedDefault(variableName) {
+  try {
+    await api("POST", `/api/derived/${encodeURIComponent(variableName)}/default`);
+    await loadState();
+  } catch (e) {
+    showError(`Derived update failed: ${e.message}`);
+  }
+}
+
 function renderDetected() {
   if (!state.identities.length) {
     return el(
@@ -205,6 +214,30 @@ function renderDerived() {
     el("div", { class: "id-section-title" }, "Derived identity variables"),
     ...state.derived.map((d) => {
       const current = d.current_value || "(missing)";
+      const action =
+        d.status === "missing"
+          ? el(
+              "button",
+              {
+                class: "btn-small derived-action",
+                title: "Fill with default",
+                onClick: () => writeDerivedDefault(d.variable_name),
+              },
+              icon("check"),
+              "Fill with default"
+            )
+          : d.status === "diverged"
+            ? el(
+                "button",
+                {
+                  class: "btn-small derived-action",
+                  title: "Use default",
+                  onClick: () => writeDerivedDefault(d.variable_name),
+                },
+                icon("refresh"),
+                "Use default"
+              )
+            : null;
       return el(
         "div",
         { class: "id-row" },
@@ -214,7 +247,8 @@ function renderDerived() {
           { class: `value ${d.current_value ? "" : "empty"}` },
           `= ${current}`
         ),
-        derivedBadge(d.status)
+        derivedBadge(d.status),
+        action
       );
     })
   );

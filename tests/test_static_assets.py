@@ -85,6 +85,18 @@ def test_frontend_import_test_wiring_is_present() -> None:
     assert "resetImportTestStates" in text
 
 
+def test_frontend_derived_default_action_wiring_is_present() -> None:
+    text = _static_text()
+
+    assert "writeDerivedDefault" in text
+    assert "/api/derived/" in text
+    assert "Fill with default" in text
+    assert "Use default" in text
+    assert "derived-action" in text
+    assert 'd.status === "missing"' in text
+    assert 'd.status === "diverged"' in text
+
+
 def test_frontend_theme_toggle_wiring_is_present() -> None:
     text = _static_text()
 

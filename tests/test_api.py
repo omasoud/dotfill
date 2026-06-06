@@ -107,6 +107,7 @@ def test_state_requires_session_header(client: TestClient) -> None:
         ("post", "/api/token/SERVICE_A", {"token": "x"}),
         ("post", "/api/test/SERVICE_A", None),
         ("post", "/api/test-all", None),
+        ("post", "/api/derived/WORK_USERNAME/default", None),
         ("post", "/api/import/scan-dropped", {"filename": "x.env", "content": "A=1\n"}),
         (
             "post",
@@ -294,6 +295,58 @@ def test_save_token_unknown_service_404(client: TestClient, ctx: AppContext) -> 
         "/api/token/UNKNOWN", headers=_headers(ctx), json={"token": "x"}
     )
     assert r.status_code == 404
+
+
+def test_derived_default_action_fills_missing(
+    client: TestClient, ctx: AppContext, env_path: Path
+) -> None:
+    r = client.post("/api/derived/WORK_USERNAME/default", headers=_headers(ctx))
+
+    assert r.status_code == 200, r.text
+    assert r.json()["updated"] == ["WORK_USERNAME"]
+    text = env_path.read_text(encoding="utf-8")
+    assert "WORK_USERNAME=alice@example.com" in text
+    assert "WORK_EMAIL=" not in text
+
+
+def test_derived_default_action_resets_diverged(
+    client: TestClient, ctx: AppContext, env_path: Path
+) -> None:
+    env_path.write_text("WORK_USERNAME=custom@example.com\n", encoding="utf-8")
+
+    r = client.post("/api/derived/WORK_USERNAME/default", headers=_headers(ctx))
+
+    assert r.status_code == 200, r.text
+    text = env_path.read_text(encoding="utf-8")
+    assert "WORK_USERNAME=alice@example.com" in text
+    assert "custom@example.com" not in text
+
+
+def test_derived_default_action_rejects_aligned(
+    client: TestClient, ctx: AppContext, env_path: Path
+) -> None:
+    env_path.write_text("WORK_USERNAME=alice@example.com\n", encoding="utf-8")
+
+    r = client.post("/api/derived/WORK_USERNAME/default", headers=_headers(ctx))
+
+    assert r.status_code == 409
+    assert "not eligible" in r.json()["detail"]
+    assert env_path.read_text(encoding="utf-8") == "WORK_USERNAME=alice@example.com\n"
+    assert ctx.session.backup_created is False
+
+
+@pytest.mark.parametrize("variable_name", ["NOPE", "SERVICE_A_TOKEN", "WORK_EMAIL"])
+def test_derived_default_action_rejects_non_derived_targets(
+    client: TestClient,
+    ctx: AppContext,
+    env_path: Path,
+    variable_name: str,
+) -> None:
+    r = client.post(f"/api/derived/{variable_name}/default", headers=_headers(ctx))
+
+    assert r.status_code == 404
+    assert env_path.read_text(encoding="utf-8") == ""
+    assert ctx.session.backup_created is False
 
 
 @respx.mock
@@ -581,6 +634,150 @@ def test_import_scan_and_commit_flow(
     text = env_path.read_text(encoding="utf-8")
     assert "SERVICE_A_TOKEN=fromsource1234" in text
     assert "SERVICE_B_TOKEN=alias-secret-9999" in text
+    assert "WORK_USERNAME=alice@example.com" in text
+
+
+def test_import_commit_fills_missing_derived_default(
+    client: TestClient, ctx: AppContext, env_path: Path
+) -> None:
+    r = client.post(
+        "/api/import/scan-dropped",
+        headers=_headers(ctx),
+        json={"filename": "src.env", "content": "SERVICE_A_TOKEN=from-import\n"},
+    )
+    scan_id = r.json()["scan_id"]
+
+    r2 = client.post(
+        "/api/import/commit",
+        headers=_headers(ctx),
+        json={
+            "scanId": scan_id,
+            "mappings": [{"sourceKey": "SERVICE_A_TOKEN", "targetKey": "SERVICE_A_TOKEN"}],
+        },
+    )
+
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["updated"] == ["SERVICE_A_TOKEN", "WORK_USERNAME"]
+    text = env_path.read_text(encoding="utf-8")
+    assert "SERVICE_A_TOKEN=from-import" in text
+    assert "WORK_USERNAME=alice@example.com" in text
+
+
+def test_import_commit_explicit_derived_value_wins_over_default(
+    client: TestClient, ctx: AppContext, env_path: Path
+) -> None:
+    r = client.post(
+        "/api/import/scan-dropped",
+        headers=_headers(ctx),
+        json={"filename": "src.env", "content": "WORK_USERNAME=imported@example.com\n"},
+    )
+    scan_id = r.json()["scan_id"]
+
+    r2 = client.post(
+        "/api/import/commit",
+        headers=_headers(ctx),
+        json={
+            "scanId": scan_id,
+            "mappings": [{"sourceKey": "WORK_USERNAME", "targetKey": "WORK_USERNAME"}],
+        },
+    )
+
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["updated"] == ["WORK_USERNAME"]
+    text = env_path.read_text(encoding="utf-8")
+    assert "WORK_USERNAME=imported@example.com" in text
+    assert "alice@example.com" not in text
+
+
+def test_import_commit_preserves_diverged_derived(
+    client: TestClient, ctx: AppContext, env_path: Path
+) -> None:
+    env_path.write_text("WORK_USERNAME=custom@example.com\n", encoding="utf-8")
+    r = client.post(
+        "/api/import/scan-dropped",
+        headers=_headers(ctx),
+        json={"filename": "src.env", "content": "SERVICE_A_TOKEN=from-import\n"},
+    )
+    scan_id = r.json()["scan_id"]
+
+    r2 = client.post(
+        "/api/import/commit",
+        headers=_headers(ctx),
+        json={
+            "scanId": scan_id,
+            "mappings": [{"sourceKey": "SERVICE_A_TOKEN", "targetKey": "SERVICE_A_TOKEN"}],
+        },
+    )
+
+    assert r2.status_code == 200, r2.text
+    text = env_path.read_text(encoding="utf-8")
+    assert "SERVICE_A_TOKEN=from-import" in text
+    assert "WORK_USERNAME=custom@example.com" in text
+
+
+def test_import_commit_does_not_write_disabled_derived_or_identities(
+    tmp_path: Path,
+) -> None:
+    env = tmp_path / ".env"
+    env.write_text("", encoding="utf-8")
+    config_root = tmp_path / "config"
+    config_root.mkdir()
+    (config_root / "config.toml").write_text(
+        f"""
+version = 1
+
+[target]
+default_env_path = "{env.as_posix()}"
+
+[identities.WORK_EMAIL]
+source = "literal"
+value = "alice@example.com"
+
+[derived.WORK_USERNAME]
+enabled = false
+from_identity = "WORK_EMAIL"
+
+[services.EXAMPLE]
+display_name = "Example"
+token_var = "EXAMPLE_TOKEN"
+token_url = "https://example.com/tokens"
+test_url = "https://example.com/me"
+""".strip(),
+        encoding="utf-8",
+    )
+    local_ctx = AppContext(
+        session=SessionState(token="session-token-x"),
+        config_context=resolve_config_context(config_root=config_root, environ={}),
+    )
+    local_client = TestClient(create_app(local_ctx))
+    r = local_client.post(
+        "/api/import/scan-dropped",
+        headers=_headers(local_ctx),
+        json={
+            "filename": "src.env",
+            "content": (
+                "EXAMPLE_TOKEN=from-import\n"
+                "WORK_EMAIL=imported@example.com\n"
+                "WORK_USERNAME=imported-user\n"
+            ),
+        },
+    )
+    scan_id = r.json()["scan_id"]
+
+    r2 = local_client.post(
+        "/api/import/commit",
+        headers=_headers(local_ctx),
+        json={
+            "scanId": scan_id,
+            "mappings": [{"sourceKey": "EXAMPLE_TOKEN", "targetKey": "EXAMPLE_TOKEN"}],
+        },
+    )
+
+    assert r2.status_code == 200, r2.text
+    text = env.read_text(encoding="utf-8")
+    assert "EXAMPLE_TOKEN=from-import" in text
+    assert "WORK_EMAIL=" not in text
+    assert "WORK_USERNAME=" not in text
 
 
 def test_import_commit_unknown_scan_404(client: TestClient, ctx: AppContext) -> None:
@@ -828,7 +1025,10 @@ def test_import_commit_skips_latest_no_change_rows(
         json={"filename": "src.env", "content": "SERVICE_A_TOKEN=scanned\n"},
     )
     scan_id = r.json()["scan_id"]
-    env_path.write_text("SERVICE_A_TOKEN=scanned\n", encoding="utf-8")
+    env_path.write_text(
+        "SERVICE_A_TOKEN=scanned\nWORK_USERNAME=alice@example.com\n",
+        encoding="utf-8",
+    )
 
     r2 = client.post(
         "/api/import/commit",
@@ -841,5 +1041,8 @@ def test_import_commit_skips_latest_no_change_rows(
 
     assert r2.status_code == 200
     assert r2.json()["updated"] == []
-    assert env_path.read_text(encoding="utf-8") == "SERVICE_A_TOKEN=scanned\n"
+    assert (
+        env_path.read_text(encoding="utf-8")
+        == "SERVICE_A_TOKEN=scanned\nWORK_USERNAME=alice@example.com\n"
+    )
     assert ctx.session.backup_created is False

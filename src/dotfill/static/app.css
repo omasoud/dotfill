@@ -195,9 +195,9 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 }
 .id-row {
   display: grid;
-  grid-template-columns: 180px minmax(0, 1fr) auto;
+  grid-template-columns: 180px minmax(0, 1fr) auto auto;
   gap: 12px; padding: 4px 0;
-  align-items: baseline;
+  align-items: center;
 }
 .id-row .label { font-family: var(--font-mono); font-size: 12px; }
 .id-row .value {
@@ -219,6 +219,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .source.detected { color: var(--color-success-text); }
 .source.explicit { color: var(--color-info-text); }
 .source.unresolved { color: var(--color-warning-text); }
+.derived-action { justify-self: end; }
 
 .svc-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
 .svc-card {

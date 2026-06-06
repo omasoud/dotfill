@@ -32,8 +32,9 @@ This document records the current implementation state, verification expectation
 - [x] Windows AD probing returns generic facts only and runs only when an enabled identity needs AD facts.
 - [x] Explicit non-empty `.env` identity overrides participate in identity state as aligned, diverged, or unresolved, using configured comparison metadata.
 - [x] dotfill never writes identity variables automatically.
-- [x] Derived variables copy enabled identities, use configured comparison metadata for aligned/diverged state, and are filled only when missing or empty during token saves.
+- [x] Derived variables copy enabled identities, use configured comparison metadata for aligned/diverged state, and are filled when missing or empty during token saves or import commits.
 - [x] Save flow writes the selected service token plus missing enabled derived variables.
+- [x] Dashboard row actions can fill missing derived variables or reset diverged derived variables to their computed defaults.
 - [x] Service tests support bearer, header API-key, and basic auth.
 - [x] Service tests send configured auth headers and `Accept: application/json`,
       apply static test headers, verify TLS by default, and classify status
@@ -44,7 +45,7 @@ This document records the current implementation state, verification expectation
 - [x] Import scans target enabled service token variables and enabled derived variables; identities are never import targets.
 - [x] Import scans skip empty source values and return masked values only.
 - [x] Import aliases are configured in TOML and never hardcoded.
-- [x] Import commit validates selected targets against current effective config, rejects duplicate selected targets, recomputes latest status, skips no-change rows using derived comparison metadata where applicable, and invalidates affected service test status.
+- [x] Import commit validates selected targets against current effective config, rejects duplicate selected targets, recomputes latest status, skips no-change rows using derived comparison metadata where applicable, fills missing enabled derived variables, and invalidates affected service test status.
 - [x] Import wizard tracks typed path, selected file, and dropped file sources separately.
 - [x] Browse mode displays `Selected file: <filename>` and rescans cached file content.
 - [x] Drop mode displays `Dropped file: <filename>` and rescans cached file content.
@@ -90,7 +91,8 @@ Focused verification areas:
 - [x] Identity fact collection and dynamic identity rule evaluation.
 - [x] `.env` parser/writer preservation and duplicate managed-variable handling.
 - [x] Save and backup behavior.
-- [x] Import scan and commit behavior, including no raw source values in responses.
+- [x] Import scan and commit behavior, including derived default fill and no raw source values in responses.
+- [x] Derived default API and dashboard actions for missing and diverged values.
 - [x] Import-row service testing with backend-held candidate values and no saved-token cache mutation.
 - [x] Bearer, header API-key, and basic service test behavior with
       secret-safe logging.
@@ -345,6 +347,49 @@ the frontend sprite local, small, and separate from private UI-control symbols.
       getting-started examples only if their icon wording becomes incomplete.
 - [x] Run focused verification with `uv run pytest tests/test_config_loader.py
       tests/test_static_assets.py`, then run the full `uv run pytest` suite.
+
+## Implemented: Derived Default Fill and Reset Actions
+
+Goal: keep derived-variable fill-in behavior conservative while allowing users
+to explicitly write computed defaults for missing or customized derived values.
+
+- [x] Update `dev/docs/requirements.md` and
+      `dev/docs/design-specification.md` to define identity and derived states,
+      import-fill behavior, and explicit derived default actions.
+- [x] Add a session-protected mutating endpoint:
+      `POST /api/derived/{variable_name}/default`.
+- [x] In the endpoint, reload current state and allow writes only when
+      `{variable_name}` is an enabled derived variable, the current derived
+      status is `missing` or `diverged`, and `computed_default` is available.
+- [x] Reject unknown or non-derived targets with `404`, and reject aligned,
+      unresolved, or otherwise ineligible derived rows with `409`.
+- [x] Write exactly `{variable_name: computed_default}` through the existing
+      save pipeline and return `{"ok": true, "updated": ["VARIABLE"]}`.
+- [x] Update import commit so selected import updates are built first, then
+      missing enabled derived defaults are added with
+      `updates.setdefault(d.variable_name, d.computed_default)`.
+- [x] Preserve explicit import mappings over computed defaults; do not
+      overwrite aligned/diverged values automatically, and do not write
+      unresolved values, disabled derived variables, or identity variables.
+- [x] Add dashboard row actions in the derived-variable list:
+      `Fill with default` for missing rows and `Use default` for diverged rows.
+      Aligned and unresolved rows should have no write action.
+- [x] After a derived default action succeeds, reload dashboard state; on
+      stale or ineligible failures, report the existing API error message
+      through the current error surface.
+- [x] Add API tests for missing fill, diverged reset, aligned rejection,
+      unknown/non-derived rejection, and ensuring the endpoint cannot write
+      identities or arbitrary keys.
+- [x] Add import tests proving import commits fill missing computable derived
+      defaults, explicit imported derived values win, diverged values are
+      preserved, and disabled derived variables and identities are not written.
+- [x] Keep existing regressions green for token-save fill, diverged
+      token-save preservation, casefold alignment without rewrite, and derived
+      import no-change comparison.
+- [x] Update public docs after implementation if the dashboard row actions or
+      import-fill behavior need user-facing explanation.
+- [x] After implementation, update current-status and verification checklists
+      to mark derived import-fill and dashboard default actions as implemented.
 
 ## Future Roadmap
 

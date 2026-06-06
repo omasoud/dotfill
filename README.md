@@ -126,7 +126,8 @@ The parser/writer preserves comments, blank lines, unrelated variables, unrelate
 
 - show configured identities, derived variables, services, config directory, and target `.env`;
 - save service tokens;
-- fill missing enabled derived variables during saves;
+- fill missing enabled derived variables during token saves and import commits;
+- fill or reset individual derived variables to their computed defaults;
 - import token/derived values from another `.env`-like file;
 - test configured service tokens on explicit user action.
 

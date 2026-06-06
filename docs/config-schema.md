@@ -210,9 +210,9 @@ compare = "exact"
 | `display` | no | Defaults to `plain`; use `masked` to mask CLI/API/UI output. |
 | `compare` | no | Defaults to `exact`; use `casefold` for case-insensitive equality. |
 
-Enabled derived variables may be filled when saving a token. Disabled derived variables are not written.
+Enabled derived variables may be filled when saving a token or committing an import. Missing or empty derived variables are filled automatically when a computed default is available. Existing non-empty derived values are preserved unless you use the dashboard row action to replace them with the computed default. Disabled derived variables are not written.
 
-Derived `compare` controls aligned/diverged status and import no-change checks for derived targets. It does not affect service token comparisons.
+Derived `compare` controls aligned/diverged status and import no-change checks for derived targets. It does not affect service token comparisons. With `compare = "casefold"`, values that differ only by casefold-equivalent casing are aligned, and dotfill does not rewrite the stored casing only to normalize it.
 
 ## Services
 

@@ -170,6 +170,14 @@ def _state_payload(state: AppState) -> dict[str, object]:
     }
 
 
+def _missing_derived_updates(state: AppState) -> dict[str, str]:
+    return {
+        d.variable_name: d.computed_default
+        for d in state.derived
+        if d.status == "missing" and d.computed_default
+    }
+
+
 def _service_fingerprint(
     state: AppState,
     *,
@@ -289,18 +297,46 @@ def create_app(ctx: AppContext) -> FastAPI:
         if svc is None:
             raise HTTPException(status_code=404, detail=f"Unknown service {service_id}")
         # Also fill in derived identity variables that are missing/empty.
-        derived_updates = {
-            d.variable_name: d.computed_default
-            for d in state.derived
-            if d.status == "missing" and d.computed_default
-        }
-        updates: dict[str, str] = dict(derived_updates)
+        updates: dict[str, str] = _missing_derived_updates(state)
         updates[svc.token_var] = body.token.get_secret_value()
         save_assignments(state.env_path, state.env_doc, updates, ctx_in.session)
         log.info("Token saved for %s", service_id)
         # Invalidate cached test result since the token value changed.
         ctx_in.session.test_results.pop(service_id, None)
         return {"ok": True, "updated": sorted(updates.keys())}
+
+    @api.post("/derived/{variable_name}/default")
+    def save_derived_default(
+        variable_name: str,
+        ctx_in: AppContext = Depends(session_dep),
+    ) -> dict[str, object]:
+        state = _state(ctx_in)
+        if variable_name not in state.effective_config.derived_variables:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Unknown derived variable {variable_name}",
+            )
+        derived = next(
+            (d for d in state.derived if d.variable_name == variable_name),
+            None,
+        )
+        if (
+            derived is None
+            or derived.status not in {"missing", "diverged"}
+            or not derived.computed_default
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Derived variable {variable_name} is not eligible for default fill",
+            )
+        save_assignments(
+            state.env_path,
+            state.env_doc,
+            {variable_name: derived.computed_default},
+            ctx_in.session,
+        )
+        log.info("Derived default saved for %s", variable_name)
+        return {"ok": True, "updated": [variable_name]}
 
     @api.post("/test/{service_id}")
     def test_one(
@@ -473,6 +509,8 @@ def create_app(ctx: AppContext) -> FastAPI:
             current_doc=state.env_doc,
             config=state.effective_config,
         )
+        for target_key, default_value in _missing_derived_updates(state).items():
+            updates.setdefault(target_key, default_value)
         save_assignments(state.env_path, state.env_doc, updates, ctx_in.session)
         log.info(
             "Import committed: %d variable(s) updated from %s",
