@@ -133,10 +133,17 @@ def _resolve_env_path(
     env_path_override: Path | None,
 ) -> Path:
     if env_path_override is not None:
-        return env_path_override.expanduser().resolve(strict=False)
+        return _normalize_env_path(env_path_override)
     if config.target.default_env_path is not None:
-        return config.target.default_env_path
+        return _normalize_env_path(config.target.default_env_path)
     return default_env_path()
+
+
+def _normalize_env_path(path: Path) -> Path:
+    resolved = path.expanduser().resolve(strict=False)
+    if resolved.is_dir():
+        return resolved / ".env"
+    return resolved
 
 
 def build_primary_identities(

@@ -94,7 +94,8 @@ Path handling:
 
 - expands `~`;
 - expands platform environment variables;
-- resolves relative paths against the current working directory.
+- resolves relative paths against the current working directory;
+- uses `<directory>/.env` when the selected path exists and is a directory.
 
 ## Identity Detectors
 

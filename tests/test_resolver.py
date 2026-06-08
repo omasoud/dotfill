@@ -326,6 +326,46 @@ def test_cli_env_path_override_wins_over_target_config(tmp_path: Path) -> None:
     assert service.masked_token == "••••••••ride"
 
 
+def test_cli_env_path_directory_targets_dotenv_file(tmp_path: Path) -> None:
+    configured_env = tmp_path / "configured.env"
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    project_dir.joinpath(".env").write_text(
+        "EXAMPLE_TOKEN=from-directory\n",
+        encoding="utf-8",
+    )
+    configured_env.write_text("EXAMPLE_TOKEN=configured\n", encoding="utf-8")
+    config_root = tmp_path / "config"
+    _write_config(config_root, env_path=configured_env)
+
+    state = build_app_state(
+        _context(config_root),
+        _session(),
+        env_path_override=project_dir,
+    )
+
+    assert state.env_path == project_dir.resolve(strict=False) / ".env"
+    service = next(s for s in state.services if s.service_id == "EXAMPLE")
+    assert service.masked_token == "••••••••tory"
+
+
+def test_configured_env_path_directory_targets_dotenv_file(tmp_path: Path) -> None:
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    project_dir.joinpath(".env").write_text(
+        "EXAMPLE_TOKEN=from-config-dir\n",
+        encoding="utf-8",
+    )
+    config_root = tmp_path / "config"
+    _write_config(config_root, env_path=project_dir)
+
+    state = build_app_state(_context(config_root), _session())
+
+    assert state.env_path == project_dir.resolve(strict=False) / ".env"
+    service = next(s for s in state.services if s.service_id == "EXAMPLE")
+    assert service.masked_token == "••••••••-dir"
+
+
 def test_disabled_service_not_duplicate_managed(tmp_path: Path) -> None:
     env = tmp_path / ".env"
     env.write_text("EXAMPLE_TOKEN=a\nEXAMPLE_TOKEN=b\n", encoding="utf-8")

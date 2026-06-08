@@ -53,6 +53,9 @@ The target `.env` path is resolved in this order:
 2. `[target].default_env_path` in TOML.
 3. `~/.env`.
 
+If the selected path exists and is a directory, dotfill uses that directory's
+`.env` file.
+
 Run `dotfill status` to see the resolved target path.
 
 ## TOML validation fails

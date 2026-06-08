@@ -140,6 +140,32 @@ def test_state_returns_payload(client: TestClient, ctx: AppContext) -> None:
     assert {"SERVICE_A", "SERVICE_B"}.issubset(service_ids)
 
 
+def test_state_accepts_env_path_override_directory(
+    config_root: Path,
+    tmp_path: Path,
+) -> None:
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    project_dir.joinpath(".env").write_text(
+        "SERVICE_A_TOKEN=directory-token\n",
+        encoding="utf-8",
+    )
+    ctx = AppContext(
+        session=SessionState(token="session-token-x"),
+        config_context=resolve_config_context(config_root=config_root, environ={}),
+        env_path=project_dir,
+    )
+    client = TestClient(create_app(ctx))
+
+    r = client.get("/api/state", headers=_headers(ctx))
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["env_path"] == str(project_dir.resolve(strict=False) / ".env")
+    service = next(s for s in body["services"] if s["service_id"] == "SERVICE_A")
+    assert service["masked_token"] == "••••••••oken"
+
+
 def test_state_masks_configured_identity_and_derived_values(
     client: TestClient,
     ctx: AppContext,

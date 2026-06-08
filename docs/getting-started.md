@@ -178,6 +178,9 @@ The target `.env` path is resolved in this order:
 2. `[target].default_env_path` in TOML.
 3. `~/.env`.
 
+If the selected path exists and is a directory, dotfill uses that directory's
+`.env` file.
+
 The target `.env` contains ordinary environment assignments. dotfill updates only configured managed variables and preserves unrelated comments, blank lines, and variables.
 
 ## Save and test tokens

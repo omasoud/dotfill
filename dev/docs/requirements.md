@@ -39,6 +39,8 @@ Resolution precedence:
 
 File behavior:
 
+- If a selected target path exists and is a directory, dotfill targets that
+  directory's `.env` file.
 - Missing target files are normal and are created on first save.
 - Input and output use UTF-8.
 - Managed assignments are updated in place when possible.

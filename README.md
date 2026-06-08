@@ -46,7 +46,11 @@ Useful options:
 ```powershell
 dotfill --config-root C:\tmp\dotfill-config --profile demo status
 dotfill --env-path C:\work\project\.env
+dotfill --env-path C:\work\project
 ```
+
+If `--env-path` points at an existing directory, dotfill uses that directory's
+`.env` file.
 
 ## First Config From An Existing `.env`
 

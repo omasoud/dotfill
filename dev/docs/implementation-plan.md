@@ -22,7 +22,7 @@ This document records the current implementation state, verification expectation
       auth replacing as a unit and service test headers merging by
       case-insensitive header name.
 - [x] `enabled = false` removes inherited services, identities, derived variables, and import aliases before required-field validation.
-- [x] Target `.env` path resolves from CLI `--env-path`, then `[target].default_env_path`, then home `.env`.
+- [x] Target `.env` path resolves from CLI `--env-path`, then `[target].default_env_path`, then home `.env`; an existing directory target resolves to that directory's `.env` file.
 - [x] `.env` parsing preserves comments, blank lines, unrelated variables, unrelated duplicates, quote style, and line endings.
 - [x] Writes are explicit, atomic, and create at most one backup per process session before the first write.
 - [x] Managed variables are enabled identities, enabled derived variables, and enabled service token variables.

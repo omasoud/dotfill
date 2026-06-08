@@ -178,6 +178,8 @@ Runtime/API models live in `models.py`:
 
 1. Load effective TOML config.
 2. Resolve target `.env` path from CLI override, config target, or home fallback.
+   If the selected path exists and is a directory, use that directory's `.env`
+   file.
 3. Read `.env` into `EnvDocument`.
 4. Compute managed variables from enabled identity names, derived names, and service token variables.
 5. Reject duplicate managed variables.
