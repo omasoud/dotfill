@@ -6,6 +6,16 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Release notes are grouped by version and category. Dates use the `YYYY-MM-DD`
 format.
 
+## [1.3.1] - 2026-06-09
+
+### Fixed
+
+- Fixed `--env-path <directory>` so it resolves to that directory's `.env`
+  file instead of treating the directory itself as the target file.
+- Fixed import wizard status recomputation so manually mapping a source value to
+  an occupied target with the same value shows `No change` instead of
+  `Replace`, while imported values remain masked.
+
 ## [1.3.0] - 2026-06-06
 
 ### Added
@@ -102,6 +112,7 @@ format.
   and web UI.
 - Added MIT licensing and PyPI publishing project metadata.
 
+[1.3.1]: https://github.com/omasoud/dotfill/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/omasoud/dotfill/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/omasoud/dotfill/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/omasoud/dotfill/compare/v1.0.0...v1.1.0
