@@ -544,6 +544,7 @@ def _scan_payload(scan) -> dict[str, object]:  # type: ignore[no-untyped-def]
                 "locked": r.locked,
                 "status": r.status,
                 "masked_source_value": r.masked_source_value,
+                "target_statuses": r.target_statuses,
             }
             for r in scan.proposed_rows
         ],

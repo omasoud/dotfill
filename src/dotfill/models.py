@@ -78,6 +78,7 @@ class ImportMappingRow:
     locked: bool
     status: ImportStatus
     masked_source_value: str | None
+    target_statuses: dict[str, ImportStatus] = field(default_factory=dict)
 
 
 @dataclass

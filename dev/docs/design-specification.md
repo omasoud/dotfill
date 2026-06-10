@@ -286,6 +286,9 @@ Commit uses scan ID plus source/target choices. It rejects duplicate selected ta
 No-change detection for service token targets is always exact. No-change
 detection for derived targets uses the derived variable's comparison mode. Scan
 previews keep masking source values regardless of target display metadata.
+Scan responses include per-row target status metadata for every eligible import
+target so the frontend can update manual remaps without receiving raw source
+values.
 
 Import-row service testing uses a dedicated import-test endpoint rather than
 the saved-token `/api/test/{service_id}` endpoint. The request contains the
@@ -447,6 +450,11 @@ The import wizard builds target dropdowns from dynamic service and derived state
 - browsed files display `Selected file: <filename>` and rescan cached browser-provided file content;
 - dropped files display `Dropped file: <filename>` and rescan cached browser-provided file content;
 - manual edits to the source field switch back to typed-path mode.
+
+When a user changes a row's `Save as` selection, the wizard recomputes that row's
+status from the scan response's per-target status metadata. This lets same-value
+manual remaps show `No change` rather than `Replace`; occupied-target data is
+only a fallback for older or incomplete scan payloads.
 
 The import mapping table includes a narrow action column immediately before
 `Status`. Rows whose `Save as` selection resolves to an enabled service token

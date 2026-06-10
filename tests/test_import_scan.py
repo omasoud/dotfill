@@ -150,6 +150,35 @@ def test_scan_no_change_and_replace(tmp_path: Path) -> None:
     assert rows["WORK_USERNAME"].status == "replace"
 
 
+def test_scan_target_statuses_support_manual_remap_no_change(tmp_path: Path) -> None:
+    env = tmp_path / ".env"
+    env.write_text("EXAMPLE_TOKEN=same-secret\n", encoding="utf-8")
+    doc = EnvDocument.from_path(env)
+    scan = scan_source_text(
+        source_label="src",
+        source_text="UNMAPPED_TOKEN=same-secret\n",
+        current_doc=doc,
+        config=_config(),
+    )
+
+    row = scan.proposed_rows[0]
+    assert row.source_key == "UNMAPPED_TOKEN"
+    assert row.target_key is None
+    assert row.status == "unmapped"
+    assert row.masked_source_value == "••••••••cret"
+    assert row.target_statuses["EXAMPLE_TOKEN"] == "no_change"
+
+    updates = build_updates_from_choices(
+        scan,
+        [("UNMAPPED_TOKEN", "EXAMPLE_TOKEN")],
+        allowed_targets={"EXAMPLE_TOKEN"},
+        current_doc=doc,
+        config=_config(),
+    )
+
+    assert updates == {}
+
+
 def test_scan_uses_casefold_compare_for_derived_no_change(tmp_path: Path) -> None:
     env = tmp_path / ".env"
     env.write_text(

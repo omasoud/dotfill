@@ -45,6 +45,9 @@ This document records the current implementation state, verification expectation
 - [x] Import scans target enabled service token variables and enabled derived variables; identities are never import targets.
 - [x] Import scans skip empty source values and return masked values only.
 - [x] Import aliases are configured in TOML and never hardcoded.
+- [x] Import scan responses include per-row target status metadata so manual
+      import remaps can show `No change`, `New`, or `Replace` without exposing
+      raw source values.
 - [x] Import commit validates selected targets against current effective config, rejects duplicate selected targets, recomputes latest status, skips no-change rows using derived comparison metadata where applicable, fills missing enabled derived variables, and invalidates affected service test status.
 - [x] Import wizard tracks typed path, selected file, and dropped file sources separately.
 - [x] Browse mode displays `Selected file: <filename>` and rescans cached file content.

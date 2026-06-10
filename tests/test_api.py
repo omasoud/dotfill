@@ -845,6 +845,25 @@ def test_scan_response_includes_occupied_targets_for_status_recomputation(
     assert "SERVICE_B_TOKEN" not in body["occupied_targets"]
 
 
+def test_scan_response_includes_target_statuses_for_manual_remap(
+    client: TestClient, ctx: AppContext, env_path: Path
+) -> None:
+    env_path.write_text("SERVICE_A_TOKEN=same-secret\n", encoding="utf-8")
+    r = client.post(
+        "/api/import/scan-dropped",
+        headers=_headers(ctx),
+        json={"filename": "source.env", "content": "JENKINS_API_TOKEN=same-secret\n"},
+    )
+
+    assert r.status_code == 200
+    body = r.json()
+    row = next(row for row in body["rows"] if row["source_key"] == "JENKINS_API_TOKEN")
+    assert row["target_key"] is None
+    assert row["status"] == "unmapped"
+    assert row["target_statuses"]["SERVICE_A_TOKEN"] == "no_change"
+    assert "same-secret" not in r.text
+
+
 def test_token_save_does_not_write_primary_identity(
     client: TestClient, ctx: AppContext, env_path: Path
 ) -> None:

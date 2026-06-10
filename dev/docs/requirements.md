@@ -327,6 +327,10 @@ No-change detection for derived-variable import targets uses that derived
 definition's `compare` mode. No-change detection for service token targets is
 always exact. Import scan previews continue to mask source values regardless of
 target display metadata.
+When a user manually remaps a source row to a different import target, the
+wizard must use scan-time backend status metadata for that selected target so a
+same-value remap shows `No change` rather than `Replace` while still keeping raw
+source values out of API responses.
 
 ## CLI Requirements
 

@@ -10,6 +10,9 @@ import {
   importSourceRequest,
 } from "./import_source_state.js";
 import {
+  recomputeImportRowStatus,
+} from "./import_mapping_status.js";
+import {
   canTestImportRow,
   clearImportTestState,
   importTestRequest,
@@ -645,16 +648,7 @@ function openImportWizard() {
   }
 
   function recomputeStatus(row) {
-    if (!row.target_key) {
-      row.status = "unmapped";
-    } else if (row._originalTarget === row.target_key && row._originalStatus) {
-      // Reverted to original target — use original server-computed status.
-      row.status = row._originalStatus;
-    } else {
-      // Remapped to a different target.
-      const occupied = currentScan.occupied_targets || [];
-      row.status = occupied.includes(row.target_key) ? "replace" : "new";
-    }
+    recomputeImportRowStatus(row, currentScan);
   }
 
   function computeSummary() {

@@ -11,6 +11,7 @@ from .config_models import EffectiveConfig
 from .envdoc import EnvDocument
 from .errors import ImportScanError
 from .models import (
+    ImportStatus,
     ImportMappingRow,
     ImportScanSession,
 )
@@ -36,6 +37,20 @@ def _target_values_equal(
     )
 
 
+def _status_for_target(
+    target_key: str,
+    candidate_value: str,
+    current_doc: EnvDocument,
+    config: EffectiveConfig,
+) -> ImportStatus:
+    current_value = current_doc.get(target_key)
+    if current_value is None:
+        return "new"
+    if _target_values_equal(target_key, current_value, candidate_value, config):
+        return "no_change"
+    return "replace"
+
+
 def scan_source_text(
     *,
     source_label: str,
@@ -56,6 +71,7 @@ def scan_source_text(
     import_targets = {service.token_var for service in config.services.values()} | set(
         config.derived_variables
     )
+    sorted_import_targets = sorted(import_targets)
     identities = set(config.identities)
     candidates: dict[str, SecretStr] = {}
     rows: list[ImportMappingRow] = []
@@ -83,17 +99,16 @@ def scan_source_text(
             kind = "none"
             locked = False
 
+        target_statuses = {
+            target_key: _status_for_target(target_key, value, current_doc, config)
+            for target_key in sorted_import_targets
+        }
+
         # Status based on diff against current_doc.
         if target is None:
             status = "unmapped"
         else:
-            current_value = current_doc.get(target)
-            if current_value is None:
-                status = "new"
-            elif _target_values_equal(target, current_value, value, config):
-                status = "no_change"
-            else:
-                status = "replace"
+            status = target_statuses[target]
 
         rows.append(
             ImportMappingRow(
@@ -103,6 +118,7 @@ def scan_source_text(
                 locked=locked,
                 status=status,  # type: ignore[arg-type]
                 masked_source_value=_mask_value(value),
+                target_statuses=target_statuses,
             )
         )
 
