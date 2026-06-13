@@ -602,7 +602,7 @@ function openImportWizard() {
   root.innerHTML = "";
 
   const fileInput = el("input", { type: "file", accept: ".env,text/plain", style: "display:none" });
-  const tableHost = el("div", {});
+  const tableHost = el("div", { class: "import-table-host" });
   let currentScan = null;
   let activeSource = createImportSourceState();
   let importTestStates = resetImportTestStates();
@@ -784,7 +784,7 @@ function openImportWizard() {
     );
 
     tableHost.appendChild(summaryEl);
-    tableHost.appendChild(table);
+    tableHost.appendChild(el("div", { class: "mapping-table-wrap" }, table));
 
     // Update footer button
     updateFooter();

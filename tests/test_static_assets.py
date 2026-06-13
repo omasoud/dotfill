@@ -85,6 +85,19 @@ def test_frontend_import_test_wiring_is_present() -> None:
     assert "resetImportTestStates" in text
 
 
+def test_frontend_import_table_is_width_constrained() -> None:
+    app_text = STATIC_DIR.joinpath("app.js").read_text(encoding="utf-8")
+    css_text = STATIC_DIR.joinpath("app.css").read_text(encoding="utf-8")
+
+    assert 'class: "import-table-host"' in app_text
+    assert 'class: "mapping-table-wrap"' in app_text
+    assert ".mapping-table-wrap" in css_text
+    assert "overflow-x: auto;" in css_text
+    assert "table-layout: fixed;" in css_text
+    assert ".mapping-table select" in css_text
+    assert "max-width: 100%;" in css_text
+
+
 def test_frontend_derived_default_action_wiring_is_present() -> None:
     text = _static_text()
 
