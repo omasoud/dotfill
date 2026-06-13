@@ -6,6 +6,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Release notes are grouped by version and category. Dates use the `YYYY-MM-DD`
 format.
 
+## [1.3.2] - 2026-06-13
+
+### Fixed
+
+- Fixed import mapping table layout so long variable names and target dropdowns
+  stay inside the import wizard background, with horizontal scrolling only when
+  needed.
+
 ## [1.3.1] - 2026-06-09
 
 ### Fixed
@@ -112,6 +120,7 @@ format.
   and web UI.
 - Added MIT licensing and PyPI publishing project metadata.
 
+[1.3.2]: https://github.com/omasoud/dotfill/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/omasoud/dotfill/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/omasoud/dotfill/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/omasoud/dotfill/compare/v1.1.0...v1.2.0
