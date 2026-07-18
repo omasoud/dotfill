@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from dotfill.identity import _RawProbe, detect_ad_facts, resolve_primary_identity
+import pytest
+
+from dotfill.identity import (
+    _RawProbe,
+    _build_probe_script,
+    _search_domain_hint,
+    detect_ad_facts,
+    resolve_primary_identity,
+)
 
 
 def test_detect_ad_facts_collects_generic_probe_fields() -> None:
@@ -115,3 +123,57 @@ def test_resolve_primary_identity_unresolved() -> None:
     )
     assert value is None
     assert source == "unresolved"
+
+
+def test_search_domain_hint_returns_trimmed_valid_user_domain() -> None:
+    assert _search_domain_hint({"USERDNSDOMAIN": "  corp.example.com  "}) == (
+        "corp.example.com"
+    )
+
+
+def test_search_domain_hint_missing_returns_empty() -> None:
+    assert _search_domain_hint({}) == ""
+    assert _search_domain_hint({"USERDNSDOMAIN": ""}) == ""
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "corp.example.com'; Write-Output unsafe",
+        "corp example.com",
+        ".corp.example.com",
+        "corp..example.com",
+        "-corp.example.com",
+        "corp.example.com-",
+    ],
+)
+def test_search_domain_hint_rejects_unsafe_or_invalid_values(value: str) -> None:
+    assert _search_domain_hint({"USERDNSDOMAIN": value}) == ""
+
+
+def test_build_probe_script_uses_explicit_domain_root_before_serverless() -> None:
+    script = _build_probe_script("corp.example.com")
+
+    assert "$dnsDomain = 'corp.example.com'" in script
+    assert 'DirectoryEntry("LDAP://$Root")' in script
+    assert "$explicitSearchCompleted = $true" in script
+    assert "if (-not $explicitSearchCompleted)" in script
+    assert "__DOMAIN_HINT__" not in script
+
+
+def test_build_probe_script_without_hint_uses_validated_upn_fallback() -> None:
+    script = _build_probe_script("")
+
+    assert "$dnsDomain = ''" in script
+    assert "whoami /upn" in script
+    assert "Test-DnsDomain" in script
+    assert "__DOMAIN_HINT__" not in script
+
+
+def test_build_probe_script_does_not_interpolate_unsafe_hint() -> None:
+    unsafe = "corp.example.com'; Write-Output unsafe"
+
+    script = _build_probe_script(unsafe)
+
+    assert unsafe not in script
+    assert "$dnsDomain = ''" in script

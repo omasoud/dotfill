@@ -117,15 +117,28 @@ def _main(
         before_config_load(config_context)
     # If no subcommand is invoked, launch the dashboard.
     if ctx.invoked_subcommand is None:
-        _launch_dashboard(ctx.obj["config_context"], ctx.obj["env_path"])
+        _launch_dashboard(
+            ctx.obj["config_context"],
+            ctx.obj["env_path"],
+            wrapper_name=ctx.obj.get("entry_wrapper_name"),
+            wrapper_version=ctx.obj.get("entry_wrapper_version"),
+        )
 
 
-def _launch_dashboard(config_context: ConfigContext, env_path: Path | None) -> None:
+def _launch_dashboard(
+    config_context: ConfigContext,
+    env_path: Path | None,
+    *,
+    wrapper_name: str | None = None,
+    wrapper_version: str | None = None,
+) -> None:
     session = _make_session()
     context = AppContext(
         session=session,
         config_context=config_context,
         env_path=env_path,
+        wrapper_name=wrapper_name,
+        wrapper_version=wrapper_version,
     )
     try:
         run_server(context)
@@ -152,6 +165,8 @@ def serve(
         session=session,
         config_context=config_context,
         env_path=env_path,
+        wrapper_name=ctx.obj.get("entry_wrapper_name"),
+        wrapper_version=ctx.obj.get("entry_wrapper_version"),
     )
     try:
         run_server(context, port=port, open_browser=not no_browser)

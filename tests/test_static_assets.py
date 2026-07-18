@@ -106,8 +106,22 @@ def test_frontend_derived_default_action_wiring_is_present() -> None:
     assert "Fill with default" in text
     assert "Use default" in text
     assert "derived-action" in text
+    assert "derived_default_state.js" in text
+    assert "beginDerivedDefault" in text
+    assert "finishDerivedDefault" in text
+    assert "isDerivedDefaultInFlight" in text
     assert 'd.status === "missing"' in text
     assert 'd.status === "diverged"' in text
+
+
+def test_frontend_wrapper_version_display_wiring_is_present() -> None:
+    text = _static_text()
+
+    assert "wrapper_display.js" in text
+    assert "formatVersionDisplay" in text
+    assert "bootstrapWrapper" in text
+    assert '{ class: "df-version" }' in text
+    assert "formatVersionDisplay(appVersion, bootstrapWrapper)" in text
 
 
 def test_frontend_theme_toggle_wiring_is_present() -> None:

@@ -35,6 +35,60 @@ def test_wrapper_argv_pass_through_and_program_name(
     assert "wrapped-dotfill" in captured.err
 
 
+@pytest.mark.parametrize(
+    ("wrapper_name", "wrapper_version"),
+    [
+        ("team-dotfill", None),
+        (None, "1.0.1"),
+        ("", "1.0.1"),
+        ("team-dotfill", "   "),
+    ],
+)
+def test_wrapper_display_metadata_requires_nonempty_pair(
+    tmp_path: Path,
+    wrapper_name: str | None,
+    wrapper_version: str | None,
+) -> None:
+    with pytest.raises(ValueError, match="wrapper_name and wrapper_version"):
+        run_dotfill(
+            config_root=tmp_path,
+            argv=["config", "path"],
+            wrapper_name=wrapper_name,
+            wrapper_version=wrapper_version,
+        )
+
+
+@pytest.mark.parametrize("argv", [[], ["serve", "--no-browser"]])
+def test_wrapper_display_metadata_reaches_both_dashboard_launch_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    argv: list[str],
+) -> None:
+    contexts: list[object] = []
+
+    def fake_run_server(
+        context: object,
+        *,
+        port: int | None = None,
+        open_browser: bool = True,
+    ) -> None:
+        contexts.append(context)
+
+    monkeypatch.setattr("dotfill.cli.run_server", fake_run_server)
+
+    code = run_dotfill(
+        config_root=tmp_path,
+        argv=argv,
+        wrapper_name="  team-dotfill  ",
+        wrapper_version="  1.0.1  ",
+    )
+
+    assert code == 0
+    assert len(contexts) == 1
+    assert getattr(contexts[0], "wrapper_name") == "team-dotfill"
+    assert getattr(contexts[0], "wrapper_version") == "1.0.1"
+
+
 def test_invalid_direct_config_dir_combinations(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="config_dir cannot be combined"):
         run_dotfill(config_dir=tmp_path / "direct", config_root=tmp_path / "root")

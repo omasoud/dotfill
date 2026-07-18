@@ -60,10 +60,14 @@ class AppContext:
         *,
         config_context: ConfigContext | None = None,
         env_path: Path | None = None,
+        wrapper_name: str | None = None,
+        wrapper_version: str | None = None,
     ) -> None:
         self.config_context = config_context or resolve_config_context()
         self.env_path_override = env_path
         self.session = session
+        self.wrapper_name = wrapper_name
+        self.wrapper_version = wrapper_version
 
 
 def _require_session(
@@ -264,7 +268,17 @@ def create_app(ctx: AppContext) -> FastAPI:
         """Public endpoint: hands the SPA its session token and version."""
         from . import __version__
 
-        return {"session_token": ctx.session.token, "version": __version__}
+        wrapper = None
+        if ctx.wrapper_name is not None and ctx.wrapper_version is not None:
+            wrapper = {
+                "name": ctx.wrapper_name,
+                "version": ctx.wrapper_version,
+            }
+        return {
+            "session_token": ctx.session.token,
+            "version": __version__,
+            "wrapper": wrapper,
+        }
 
     @api.post("/open-folder")
     def open_folder(ctx_in: AppContext = Depends(session_dep)) -> dict[str, object]:
@@ -320,6 +334,8 @@ def create_app(ctx: AppContext) -> FastAPI:
             (d for d in state.derived if d.variable_name == variable_name),
             None,
         )
+        if derived is not None and derived.status == "aligned":
+            return {"ok": True, "updated": []}
         if (
             derived is None
             or derived.status not in {"missing", "diverged"}

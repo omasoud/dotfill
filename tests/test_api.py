@@ -91,6 +91,25 @@ def test_bootstrap_returns_session_token(client: TestClient, ctx: AppContext) ->
     data = r.json()
     assert data["session_token"] == ctx.session.token
     assert "version" in data
+    assert data["wrapper"] is None
+
+
+def test_bootstrap_returns_structured_wrapper_metadata(config_root: Path) -> None:
+    local_ctx = AppContext(
+        session=SessionState(token="session-token-x"),
+        config_context=resolve_config_context(config_root=config_root, environ={}),
+        wrapper_name="<team-dotfill>",
+        wrapper_version="1.0.1&preview",
+    )
+    local_client = TestClient(create_app(local_ctx))
+
+    r = local_client.get("/api/bootstrap")
+
+    assert r.status_code == 200
+    assert r.json()["wrapper"] == {
+        "name": "<team-dotfill>",
+        "version": "1.0.1&preview",
+    }
 
 
 def test_state_requires_session_header(client: TestClient) -> None:
@@ -348,17 +367,32 @@ def test_derived_default_action_resets_diverged(
     assert "custom@example.com" not in text
 
 
-def test_derived_default_action_rejects_aligned(
+def test_derived_default_action_aligned_is_successful_noop(
     client: TestClient, ctx: AppContext, env_path: Path
 ) -> None:
     env_path.write_text("WORK_USERNAME=alice@example.com\n", encoding="utf-8")
 
     r = client.post("/api/derived/WORK_USERNAME/default", headers=_headers(ctx))
 
-    assert r.status_code == 409
-    assert "not eligible" in r.json()["detail"]
+    assert r.status_code == 200
+    assert r.json()["updated"] == []
     assert env_path.read_text(encoding="utf-8") == "WORK_USERNAME=alice@example.com\n"
     assert ctx.session.backup_created is False
+
+
+def test_derived_default_action_repeated_request_is_idempotent(
+    client: TestClient, ctx: AppContext, env_path: Path
+) -> None:
+    first = client.post("/api/derived/WORK_USERNAME/default", headers=_headers(ctx))
+    after_first = env_path.read_text(encoding="utf-8")
+
+    second = client.post("/api/derived/WORK_USERNAME/default", headers=_headers(ctx))
+
+    assert first.status_code == 200
+    assert first.json()["updated"] == ["WORK_USERNAME"]
+    assert second.status_code == 200
+    assert second.json()["updated"] == []
+    assert env_path.read_text(encoding="utf-8") == after_first
 
 
 @pytest.mark.parametrize("variable_name", ["NOPE", "SERVICE_A_TOKEN", "WORK_EMAIL"])

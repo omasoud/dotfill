@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import logging
+import os
+import re
 import shutil
 import subprocess
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from .config_models import CompareMode
@@ -13,7 +16,11 @@ from .value_policy import values_equal
 
 log = logging.getLogger(__name__)
 
-_POWERSHELL_SCRIPT = r"""
+_DNS_LABEL_RE = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$"
+)
+
+_POWERSHELL_TEMPLATE = r"""
 $ErrorActionPreference = 'Stop'
 try {
     $samCompound = [Security.Principal.WindowsIdentity]::GetCurrent().Name
@@ -28,11 +35,70 @@ try {
     }
     Write-Output "SAM:$sam"
     Write-Output "DOMAIN:$domain"
+
+    function Test-DnsDomain {
+        param([string] $Value)
+        if (-not $Value -or $Value.Length -gt 253) { return $false }
+        foreach ($label in $Value.Split('.')) {
+            if (-not $label -or $label.Length -gt 63) { return $false }
+            if ($label -notmatch '^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$') {
+                return $false
+            }
+        }
+        return $true
+    }
+
+    $dnsDomain = '__DOMAIN_HINT__'
+    if (-not $dnsDomain) {
+        try {
+            $upnCandidate = (whoami /upn 2>$null | Select-Object -First 1)
+            if ($upnCandidate -and $upnCandidate.Contains('@')) {
+                $candidateDomain = $upnCandidate.Substring(
+                    $upnCandidate.IndexOf('@') + 1
+                ).Trim()
+                if (Test-DnsDomain $candidateDomain) {
+                    $dnsDomain = $candidateDomain
+                }
+            }
+        } catch { }
+    }
+
     Add-Type -AssemblyName System.DirectoryServices
-    $searcher = New-Object System.DirectoryServices.DirectorySearcher
-    $searcher.Filter = "(&(objectClass=user)(sAMAccountName=$sam))"
-    $searcher.PropertiesToLoad.AddRange(@("mail", "proxyAddresses", "userPrincipalName"))
-    $result = $searcher.FindOne()
+
+    function Invoke-UserSearch {
+        param([string] $Root)
+        if ($Root) {
+            $entry = New-Object System.DirectoryServices.DirectoryEntry("LDAP://$Root")
+            $searcher = New-Object System.DirectoryServices.DirectorySearcher($entry)
+        } else {
+            $searcher = New-Object System.DirectoryServices.DirectorySearcher
+        }
+        $searcher.Filter = "(&(objectClass=user)(sAMAccountName=$sam))"
+        $searcher.PropertiesToLoad.AddRange(
+            @("mail", "proxyAddresses", "userPrincipalName")
+        ) | Out-Null
+        return $searcher.FindOne()
+    }
+
+    $result = $null
+    $explicitSearchCompleted = $false
+    $searchErrors = @()
+    if ($dnsDomain) {
+        try {
+            $result = Invoke-UserSearch -Root $dnsDomain
+            $explicitSearchCompleted = $true
+        } catch {
+            $searchErrors += "explicit bind ($dnsDomain): " + $_.Exception.Message
+        }
+    }
+    if (-not $explicitSearchCompleted) {
+        try {
+            $result = Invoke-UserSearch -Root $null
+        } catch {
+            $searchErrors += "serverless bind: " + $_.Exception.Message
+        }
+    }
+
     if ($null -ne $result) {
         $props = $result.Properties
         if ($props['mail'].Count -gt 0) {
@@ -50,11 +116,36 @@ try {
         }
     } else {
         Write-Output "MAIL:"
+        foreach ($searchError in $searchErrors) {
+            Write-Output ("ERR:" + $searchError)
+        }
     }
 } catch {
     Write-Output ("ERR:" + $_.Exception.Message)
 }
-""".strip()
+"""
+
+
+def _is_valid_dns_domain(value: str) -> bool:
+    """Return whether *value* is safe and structurally valid as a DNS domain."""
+    if not value or len(value) > 253:
+        return False
+    return all(_DNS_LABEL_RE.fullmatch(label) for label in value.split("."))
+
+
+def _search_domain_hint(environ: Mapping[str, str] | None = None) -> str:
+    """Return a validated user directory DNS domain from the environment."""
+    env = os.environ if environ is None else environ
+    value = (env.get("USERDNSDOMAIN") or "").strip()
+    return value if _is_valid_dns_domain(value) else ""
+
+
+def _build_probe_script(domain_hint: str) -> str:
+    """Build the PowerShell probe with a validated explicit-domain hint."""
+    safe_hint = domain_hint.strip()
+    if not _is_valid_dns_domain(safe_hint):
+        safe_hint = ""
+    return _POWERSHELL_TEMPLATE.replace("__DOMAIN_HINT__", safe_hint).strip()
 
 
 @dataclass
@@ -71,9 +162,10 @@ def _run_powershell_probe() -> _RawProbe:
     pwsh = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
     if not pwsh:
         return _RawProbe(errors=["PowerShell not found on PATH"])
+    script = _build_probe_script(_search_domain_hint())
     try:
         proc = subprocess.run(  # noqa: S603 - controlled args
-            [pwsh, "-NoProfile", "-NonInteractive", "-Command", _POWERSHELL_SCRIPT],
+            [pwsh, "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True,
             text=True,
             timeout=15,

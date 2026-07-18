@@ -87,6 +87,24 @@ An identity can be unresolved when dotfill cannot find a configured value, envir
 
 Unresolved identities block state construction only when enabled derived variables, service URL templates, or dependent identity rules need them.
 
+For a `windows_ad.*` identity, being connected to a VPN does not by itself
+confirm that Windows can locate and query a directory controller. Check the
+current user's directory context in PowerShell:
+
+```powershell
+$env:USERDNSDOMAIN
+whoami /upn
+nltest /dsgetdc:$env:USERDNSDOMAIN
+```
+
+dotfill validates `USERDNSDOMAIN` and uses it as an explicit LDAP search root.
+If it is unavailable, dotfill tries the domain suffix from `whoami /upn`, then
+uses the device's default directory context only as a compatibility fallback.
+If the commands above do not return a usable user domain or cannot locate a
+controller, reconnect through a network path that provides directory DNS and
+LDAP access. An explicit non-empty assignment for the configured identity in
+the target `.env` remains the offline override.
+
 ## Duplicate managed variables are reported
 
 dotfill rejects duplicate managed variables before writing. Remove or combine duplicate assignments for enabled identity names, derived variable names, and service token variables.

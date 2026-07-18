@@ -26,10 +26,19 @@ import {
   resolveInitialTheme,
   storeTheme,
 } from "./theme_state.js";
+import {
+  beginDerivedDefault,
+  createDerivedDefaultState,
+  finishDerivedDefault,
+  isDerivedDefaultInFlight,
+} from "./derived_default_state.js";
+import { formatVersionDisplay } from "./wrapper_display.js";
 
 let sessionToken = null;
 let state = null;
 let appVersion = "";
+let bootstrapWrapper = null;
+const derivedDefaultState = createDerivedDefaultState();
 let activeTheme = applyTheme(resolveInitialTheme());
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -112,6 +121,7 @@ async function bootstrap() {
   const data = await api("GET", "/api/bootstrap");
   if (!sessionToken) sessionToken = data.session_token;
   appVersion = data.version || "";
+  bootstrapWrapper = data.wrapper || null;
 }
 
 async function loadState(options = {}) {
@@ -148,11 +158,16 @@ function derivedBadge(status) {
 }
 
 async function writeDerivedDefault(variableName) {
+  if (!beginDerivedDefault(derivedDefaultState, variableName)) return;
+  render();
   try {
     await api("POST", `/api/derived/${encodeURIComponent(variableName)}/default`);
     await loadState();
   } catch (e) {
     showError(`Derived update failed: ${e.message}`);
+  } finally {
+    finishDerivedDefault(derivedDefaultState, variableName);
+    render();
   }
 }
 
@@ -224,6 +239,10 @@ function renderDerived() {
               {
                 class: "btn-small derived-action",
                 title: "Fill with default",
+                disabled: isDerivedDefaultInFlight(
+                  derivedDefaultState,
+                  d.variable_name
+                ),
                 onClick: () => writeDerivedDefault(d.variable_name),
               },
               icon("check"),
@@ -235,6 +254,10 @@ function renderDerived() {
                 {
                   class: "btn-small derived-action",
                   title: "Use default",
+                  disabled: isDerivedDefaultInFlight(
+                    derivedDefaultState,
+                    d.variable_name
+                  ),
                   onClick: () => writeDerivedDefault(d.variable_name),
                 },
                 icon("refresh"),
@@ -388,7 +411,11 @@ function render() {
         "div",
         { class: "df-title-row" },
         el("div", { class: "df-title" }, "dotfill"),
-        el("span", { class: "df-version" }, `v${appVersion}`)
+        el(
+          "span",
+          { class: "df-version" },
+          formatVersionDisplay(appVersion, bootstrapWrapper)
+        )
       ),
       el("div", { class: "df-path" },
         icon("file"),

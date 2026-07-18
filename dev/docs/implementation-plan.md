@@ -29,12 +29,17 @@ This document records the current implementation state, verification expectation
 - [x] Duplicate managed variables block state construction with line-number context.
 - [x] Identity rules support `literal`, `env`, `local_part`, `windows_ad.email_by_domain`, `windows_ad.sam`, and `windows_ad.domain`.
 - [x] Identity and derived definitions support `display = "plain" | "masked"` and `compare = "exact" | "casefold"` metadata.
-- [x] Windows AD probing returns generic facts only and runs only when an enabled identity needs AD facts.
+- [x] Windows AD probing returns generic facts only, runs only when an enabled
+      identity needs AD facts, and prefers a validated explicit user-domain
+      LDAP root before controlled serverless fallback.
 - [x] Explicit non-empty `.env` identity overrides participate in identity state as aligned, diverged, or unresolved, using configured comparison metadata.
 - [x] dotfill never writes identity variables automatically.
 - [x] Derived variables copy enabled identities, use configured comparison metadata for aligned/diverged state, and are filled when missing or empty during token saves or import commits.
 - [x] Save flow writes the selected service token plus missing enabled derived variables.
-- [x] Dashboard row actions can fill missing derived variables or reset diverged derived variables to their computed defaults.
+- [x] Dashboard row actions can fill missing derived variables or reset
+      diverged derived variables to their computed defaults, guard against
+      same-row requests in flight, and treat repeated aligned requests as
+      idempotent no-ops.
 - [x] Service tests support bearer, header API-key, and basic auth.
 - [x] Service tests send configured auth headers and `Accept: application/json`,
       apply static test headers, verify TLS by default, and classify status
@@ -57,7 +62,9 @@ This document records the current implementation state, verification expectation
 - [x] Import row test buttons render immediately before `Status`, use icon-only row status, and reset on target/source changes.
 - [x] CLI supports default launch, `serve`, `status`, `config path`, `config open`, `--config-root`, `--profile`, `--env-path`, and `--verbose`.
 - [x] Stable wrapper-facing entrypoints are exposed through `dotfill.entrypoints`.
-- [x] `run_dotfill(...) -> int` supports `config_dir`, `config_root`, `profile`, `default_profile`, `locked_profile`, `env_path`, `argv`, `program_name`, and `before_config_load`.
+- [x] `run_dotfill(...) -> int` supports `config_dir`, `config_root`, `profile`,
+      `default_profile`, `locked_profile`, `env_path`, `argv`, `program_name`,
+      paired `wrapper_name`/`wrapper_version`, and `before_config_load`.
 - [x] Wrapper entrypoints can use `locked_profile` to enforce one profile while preserving config-root, env-path, argv, program-name, and before-config-load behavior.
 - [x] Local server binds to `127.0.0.1`; `/api/bootstrap` is public and all other API endpoints require `X-Dotfill-Session`.
 - [x] Mutating API endpoints reject unexpected non-local `Origin` headers and emit no permissive CORS headers.
@@ -74,6 +81,9 @@ This document records the current implementation state, verification expectation
 - [x] Frontend icon rendering falls back to the `key` symbol if a referenced
       SVG symbol is unavailable.
 - [x] Dashboard supports empty generic state when no services, identities, or derived variables are configured.
+- [x] Dashboard version display keeps the dotfill package version visible and
+      appends optional wrapper name/version metadata supplied by the stable
+      entrypoint.
 
 ## Verification Matrix
 
@@ -92,15 +102,20 @@ Focused verification areas:
 - [x] TOML load, merge, disable semantics, strict schema validation, and useful non-secret errors.
 - [x] Empty config state with no built-in services.
 - [x] Identity fact collection and dynamic identity rule evaluation.
+- [x] Explicit-domain Windows AD lookup, DNS-hint validation, no-match boundary,
+      compatibility fallback, and diagnostic parsing.
 - [x] `.env` parser/writer preservation and duplicate managed-variable handling.
 - [x] Save and backup behavior.
 - [x] Import scan and commit behavior, including derived default fill and no raw source values in responses.
 - [x] Derived default API and dashboard actions for missing and diverged values.
+- [x] Repeated derived-default API no-op behavior and frontend in-flight guard.
 - [x] Import-row service testing with backend-held candidate values and no saved-token cache mutation.
 - [x] Bearer, header API-key, and basic service test behavior with
       secret-safe logging.
 - [x] API session protection, origin checks, CORS absence, and bootstrap behavior.
 - [x] CLI commands and stable entrypoint behavior.
+- [x] Wrapper display-metadata validation, launch propagation, bootstrap payload,
+      and text-only frontend formatting.
 - [x] Frontend static checks for no secret browser storage and generic bundled assets.
 - [x] Frontend theme preference and import-test state helper behavior.
 - [x] Public service icon registry validation and bundled sprite alignment.
@@ -364,8 +379,9 @@ to explicitly write computed defaults for missing or customized derived values.
 - [x] In the endpoint, reload current state and allow writes only when
       `{variable_name}` is an enabled derived variable, the current derived
       status is `missing` or `diverged`, and `computed_default` is available.
-- [x] Reject unknown or non-derived targets with `404`, and reject aligned,
-      unresolved, or otherwise ineligible derived rows with `409`.
+- [x] Reject unknown or non-derived targets with `404`, treat already-aligned
+      rows as successful no-ops, and reject unresolved or otherwise
+      non-computable derived rows with `409`.
 - [x] Write exactly `{variable_name: computed_default}` through the existing
       save pipeline and return `{"ok": true, "updated": ["VARIABLE"]}`.
 - [x] Update import commit so selected import updates are built first, then
@@ -380,7 +396,7 @@ to explicitly write computed defaults for missing or customized derived values.
 - [x] After a derived default action succeeds, reload dashboard state; on
       stale or ineligible failures, report the existing API error message
       through the current error surface.
-- [x] Add API tests for missing fill, diverged reset, aligned rejection,
+- [x] Add API tests for missing fill, diverged reset, aligned no-op behavior,
       unknown/non-derived rejection, and ensuring the endpoint cannot write
       identities or arbitrary keys.
 - [x] Add import tests proving import commits fill missing computable derived
@@ -394,33 +410,33 @@ to explicitly write computed defaults for missing or customized derived values.
 - [x] After implementation, update current-status and verification checklists
       to mark derived import-fill and dashboard default actions as implemented.
 
-## Planned: Explicit-Domain Windows AD Lookup
+## Implemented: Explicit-Domain Windows AD Lookup
 
 Goal: resolve generic Windows AD facts on devices that can reach the user
 directory but do not provide a usable computer-domain default naming context.
 
 - [x] AD-BIND-01 Document the explicit-domain bind strategy, safe domain-hint
       selection, compatibility fallback boundary, and neutral diagnostics.
-- [ ] AD-BIND-02 Add a failing regression test for a valid explicit user-domain
+- [x] AD-BIND-02 Add a failing regression test for a valid explicit user-domain
       hint on a device where a serverless lookup is unavailable.
-- [ ] AD-BIND-03 Refactor the PowerShell probe to prefer a DNS-safe
+- [x] AD-BIND-03 Refactor the PowerShell probe to prefer a DNS-safe
       `USERDNSDOMAIN`, fall back to a valid `whoami /upn` suffix, and root the
       search at `LDAP://<dns-domain>`.
-- [ ] AD-BIND-04 Retain serverless lookup only when no valid hint exists or the
+- [x] AD-BIND-04 Retain serverless lookup only when no valid hint exists or the
       explicit bind/search raises; do not cross into the default context after
       a successful explicit search returns no match.
-- [ ] AD-BIND-05 Preserve the existing generic fact protocol and surface safe
+- [x] AD-BIND-05 Preserve the existing generic fact protocol and surface safe
       diagnostics when both explicit and compatibility lookup paths fail.
-- [ ] AD-BIND-06 Add focused tests for valid, missing, and unsafe hints;
+- [x] AD-BIND-06 Add focused tests for valid, missing, and unsafe hints;
       explicit-root construction; exception fallback; no-match behavior; and
       unchanged fact parsing.
-- [ ] AD-BIND-07 Verify the probe on a traditional domain-joined device and on
+- [x] AD-BIND-07 Verify the probe on a traditional domain-joined device and on
       a cloud/hybrid-joined device with directory-controller reachability, then
       run the full test suite.
-- [ ] AD-BIND-08 Update user-facing troubleshooting guidance after the behavior
+- [x] AD-BIND-08 Update user-facing troubleshooting guidance after the behavior
       is implemented, using only neutral domains and device descriptions.
 
-## Planned: Idempotent Derived Default Actions
+## Implemented: Idempotent Derived Default Actions
 
 Goal: make rapid, repeated, or stale derived-default requests harmless and
 keep the dashboard from presenting a false failure after the first request
@@ -428,40 +444,40 @@ already succeeded.
 
 - [x] DERIVED-IDEM-01 Document aligned requests as successful no-ops and define
       the frontend per-variable in-flight guard.
-- [ ] DERIVED-IDEM-02 Add an API reproducer that posts the same missing-derived
+- [x] DERIVED-IDEM-02 Add an API reproducer that posts the same missing-derived
       default action twice and expects the second response to succeed with
       `updated = []` while preserving the first value.
-- [ ] DERIVED-IDEM-03 Change the endpoint to return idempotent success for an
+- [x] DERIVED-IDEM-03 Change the endpoint to return idempotent success for an
       already-aligned value while retaining `404` for unknown/disabled targets
       and `409` for unresolved/non-computable targets.
-- [ ] DERIVED-IDEM-04 Disable the clicked row action immediately and suppress a
+- [x] DERIVED-IDEM-04 Disable the clicked row action immediately and suppress a
       second request for the same variable until the first request and refresh
       settle.
-- [ ] DERIVED-IDEM-05 Add frontend regression coverage for the in-flight guard,
+- [x] DERIVED-IDEM-05 Add frontend regression coverage for the in-flight guard,
       disabled state, retry after failure, and no error banner after an aligned
       no-op response.
-- [ ] DERIVED-IDEM-06 Run focused API/frontend tests and the full test suite;
+- [x] DERIVED-IDEM-06 Run focused API/frontend tests and the full test suite;
       update user-facing troubleshooting text only if the corrected behavior
       changes useful user guidance.
 
-## Planned: Wrapper Version Display Metadata
+## Implemented: Wrapper Version Display Metadata
 
 Goal: let a wrapper identify its own command/version in the dashboard while
 keeping the dotfill package version visible and authoritative.
 
 - [x] WRAP-META-01 Document paired optional `wrapper_name`/`wrapper_version`
       entrypoint inputs, bootstrap payload shape, and dashboard formatting.
-- [ ] WRAP-META-02 Add paired optional parameters to `run_dotfill(...)`, reject
+- [x] WRAP-META-02 Add paired optional parameters to `run_dotfill(...)`, reject
       partial or blank metadata, and keep `program_name` behavior independent.
-- [ ] WRAP-META-03 Propagate validated metadata through both dashboard launch
+- [x] WRAP-META-03 Propagate validated metadata through both dashboard launch
       paths into `AppContext` and expose a structured nullable `wrapper` value
       from `/api/bootstrap`.
-- [ ] WRAP-META-04 Render direct launches as `v<dotfill-version>` and wrapped
+- [x] WRAP-META-04 Render direct launches as `v<dotfill-version>` and wrapped
       launches as
       `v<dotfill-version> (<wrapper-name> v<wrapper-version>)` using text nodes.
-- [ ] WRAP-META-05 Add entrypoint, CLI propagation, API bootstrap, and static
+- [x] WRAP-META-05 Add entrypoint, CLI propagation, API bootstrap, and static
       frontend tests for absent, valid, partial, blank, and markup-like metadata.
-- [ ] WRAP-META-06 Update README and wrapper-author documentation with a neutral
+- [x] WRAP-META-06 Update README and wrapper-author documentation with a neutral
       `run_dotfill(...)` example after implementation, then run packaging and
       full-suite verification.
 

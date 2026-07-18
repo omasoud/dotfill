@@ -6,6 +6,20 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Release notes are grouped by version and category. Dates use the `YYYY-MM-DD`
 format.
 
+## [Unreleased]
+
+### Added
+
+- Added explicit user-domain LDAP lookup for Windows AD facts, with validated
+  domain hints and a controlled serverless compatibility fallback.
+- Added optional wrapper name/version metadata to `run_dotfill(...)` and the
+  dashboard version display.
+
+### Fixed
+
+- Made repeated derived-default requests idempotent and guarded dashboard row
+  actions while a request is in flight.
+
 ## [1.3.2] - 2026-06-13
 
 ### Fixed

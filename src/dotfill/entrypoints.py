@@ -41,6 +41,26 @@ def _direct_config_context(config_dir: str | os.PathLike[str]) -> ConfigContext:
     )
 
 
+def _normalize_wrapper_metadata(
+    wrapper_name: str | None,
+    wrapper_version: str | None,
+) -> tuple[str | None, str | None]:
+    """Validate and normalize optional paired wrapper display metadata."""
+    if wrapper_name is None and wrapper_version is None:
+        return None, None
+    if wrapper_name is None or wrapper_version is None:
+        raise ValueError(
+            "wrapper_name and wrapper_version must be provided together"
+        )
+    normalized_name = wrapper_name.strip()
+    normalized_version = wrapper_version.strip()
+    if not normalized_name or not normalized_version:
+        raise ValueError(
+            "wrapper_name and wrapper_version must be non-empty strings"
+        )
+    return normalized_name, normalized_version
+
+
 def run_dotfill(
     *,
     config_dir: str | os.PathLike[str] | None = None,
@@ -51,6 +71,8 @@ def run_dotfill(
     env_path: str | os.PathLike[str] | None = None,
     argv: Sequence[str] | None = None,
     program_name: str = "dotfill",
+    wrapper_name: str | None = None,
+    wrapper_version: str | None = None,
     before_config_load: BeforeConfigLoad | None = None,
 ) -> int:
     """Run dotfill without calling ``sys.exit``.
@@ -81,6 +103,10 @@ def run_dotfill(
         argv: Command-line arguments to pass to dotfill, excluding the program
             name. ``None`` reads arguments from the active process.
         program_name: Program name shown in CLI help and error output.
+        wrapper_name: Optional wrapper name shown beside dotfill's dashboard
+            version. Must be supplied with ``wrapper_version``.
+        wrapper_version: Optional wrapper version shown beside dotfill's
+            dashboard version. Must be supplied with ``wrapper_name``.
         before_config_load: Optional hook called with the resolved
             ``ConfigContext`` after path resolution and before TOML loading.
     """
@@ -101,6 +127,10 @@ def run_dotfill(
             "locked_profile cannot be combined with profile or default_profile"
         )
 
+    normalized_wrapper_name, normalized_wrapper_version = (
+        _normalize_wrapper_metadata(wrapper_name, wrapper_version)
+    )
+
     obj: dict[str, object] = {}
     if config_dir is not None:
         obj["entry_config_context"] = _direct_config_context(config_dir)
@@ -116,6 +146,9 @@ def run_dotfill(
 
     if env_path is not None:
         obj["entry_env_path"] = Path(env_path)
+    if normalized_wrapper_name is not None:
+        obj["entry_wrapper_name"] = normalized_wrapper_name
+        obj["entry_wrapper_version"] = normalized_wrapper_version
     if before_config_load is not None:
         obj["entry_before_config_load"] = before_config_load
 
