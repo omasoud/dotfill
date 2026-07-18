@@ -8,6 +8,8 @@ format.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-07-18
+
 ### Added
 
 - Added explicit user-domain LDAP lookup for Windows AD facts, with validated
@@ -134,6 +136,8 @@ format.
   and web UI.
 - Added MIT licensing and PyPI publishing project metadata.
 
+[Unreleased]: https://github.com/omasoud/dotfill/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/omasoud/dotfill/compare/v1.3.2...v1.4.0
 [1.3.2]: https://github.com/omasoud/dotfill/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/omasoud/dotfill/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/omasoud/dotfill/compare/v1.2.0...v1.3.0

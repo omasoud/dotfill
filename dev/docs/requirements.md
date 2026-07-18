@@ -441,7 +441,7 @@ When `locked_profile` is set:
 - Show the package version as `v<dotfill-version>` for direct launches. When
   wrapper metadata is present, append
   ` (<wrapper-name> v<wrapper-version>)`, for example
-  `v1.3.2 (team-dotfill v1.0.1)`.
+  `v1.4.0 (team-dotfill v1.0.1)`.
 - Render service icons from configured public service icon keys.
 - Fall back to the `key` icon if a referenced SVG symbol is unavailable at
   render time; backend config validation remains the primary guard against

@@ -445,7 +445,7 @@ structured nullable value such as:
 
 ```json
 {
-  "version": "1.3.2",
+  "version": "1.4.0",
   "wrapper": {
     "name": "team-dotfill",
     "version": "1.0.1"
@@ -454,8 +454,8 @@ structured nullable value such as:
 ```
 
 Direct launches return `"wrapper": null`. The frontend builds the display
-with DOM text nodes: `v1.3.2` for direct launches and
-`v1.3.2 (team-dotfill v1.0.1)` for wrapped launches. It must not insert wrapper
+with DOM text nodes: `v1.4.0` for direct launches and
+`v1.4.0 (team-dotfill v1.0.1)` for wrapped launches. It must not insert wrapper
 metadata through `innerHTML`.
 
 ## Server and API Design

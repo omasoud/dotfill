@@ -198,7 +198,7 @@ directly. User overrides remain in `config.toml`.
 
 `wrapper_name` and `wrapper_version` are optional, but they must be supplied
 together. They add the wrapper identity beside dotfill's own dashboard version,
-for example `v1.3.2 (team-dotfill v1.0.1)`. `program_name` remains independent
+for example `v1.4.0 (team-dotfill v1.0.1)`. `program_name` remains independent
 and controls the command name used in CLI help and errors.
 
 For a complete sample wrapper repo, see
