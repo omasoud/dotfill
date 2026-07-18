@@ -205,6 +205,37 @@ Windows AD probing returns generic facts:
 - normalized `emails`
 - `diagnostics`
 
+### Windows AD Bind Strategy
+
+The user lookup must not rely exclusively on a serverless
+`DirectorySearcher`. A serverless bind uses the device's default naming
+context, which may be absent on a cloud-joined or hybrid-joined device even
+when the current user has directory credentials and a directory controller is
+reachable through a VPN.
+
+The probe resolves and searches in this order:
+
+1. Read the current Windows identity as today so the generic SAM/domain facts
+   remain available.
+2. Choose an explicit directory DNS-domain hint from a valid, trimmed
+   `USERDNSDOMAIN`; if unavailable, use the suffix of a successfully resolved
+   `whoami /upn` value.
+3. Validate the hint as a DNS name before placing it in an LDAP path or
+   interpolating it into a generated command. Invalid or unsafe values are
+   treated as unavailable.
+4. When a valid hint exists, root the search at `LDAP://<dns-domain>` with a
+   `DirectoryEntry` and construct the `DirectorySearcher` from that entry.
+5. Use a serverless search only when no valid explicit hint exists or the
+   explicit bind/search raises. If an explicit search completes successfully
+   but finds no matching account, report the unresolved result and its safe
+   diagnostics rather than searching an unrelated default context.
+
+The existing generic output protocol (`SAM`, `DOMAIN`, `MAIL`, `UPN`, `PROXY`,
+and `ERR`) remains stable. The implementation must not contain a built-in
+directory domain. Tests should exercise domain selection and validation,
+explicit-bind construction, compatibility fallback, successful empty results,
+and diagnostic parsing without requiring a live directory.
+
 Identity rules map config to values. Supported sources:
 
 - `literal`
@@ -263,6 +294,22 @@ derived values. Diverged derived values are preserved unless the user explicitly
 chooses the row-level default action. Disabled derived variables are absent from
 derived state and are never written. Derived variables whose source identity is
 unresolved are not eligible for automatic fill or explicit reset.
+
+The row-level default endpoint is a desired-state operation and is idempotent.
+After rebuilding current state, it behaves as follows:
+
+- `missing` or `diverged` with a computed default: write exactly the derived
+  variable and return it in `updated`;
+- `aligned`: perform no write and return success with `updated = []`;
+- unresolved or missing computed default: return `409`;
+- unknown or disabled derived variable: return `404`.
+
+The frontend also maintains a per-variable in-flight guard. A row action is
+disabled synchronously before its request begins, and another activation for
+that variable is ignored until the request settles. Success reloads dashboard
+state; failure restores the action and uses the existing non-secret error
+surface. Backend idempotency remains required because client-side guarding
+cannot prevent stale, retried, or non-browser requests.
 
 ## `.env` Document Design
 
@@ -374,6 +421,8 @@ from dotfill.entrypoints import resolve_config_context, run_dotfill
 - `env_path`
 - `argv`
 - `program_name`
+- `wrapper_name`
+- `wrapper_version`
 - `before_config_load`
 
 `profile` is a programmatic explicit profile. `default_profile` is a fallback
@@ -382,6 +431,32 @@ used only when CLI input and `DOTFILL_PROFILE` do not select a profile.
 must either be absent or match it.
 
 `config_dir` cannot be combined with `config_root`, `profile`, `default_profile`, or `locked_profile`. `locked_profile` cannot be combined with `profile` or `default_profile`. `before_config_load` runs after context resolution and before TOML loading.
+
+`wrapper_name` and `wrapper_version` are optional paired dashboard display
+metadata. Supplying only one, or supplying an empty/whitespace-only value, is a
+wrapper API error. They are separate from `program_name`: wrapper metadata does
+not rename the Typer program and `program_name` does not implicitly opt into
+dashboard wrapper branding.
+
+The entrypoint passes validated wrapper metadata through the Typer context to
+both the default dashboard launch and the explicit `serve` command.
+`AppContext` retains it for bootstrap only. `/api/bootstrap` returns a
+structured nullable value such as:
+
+```json
+{
+  "version": "1.3.2",
+  "wrapper": {
+    "name": "team-dotfill",
+    "version": "1.0.1"
+  }
+}
+```
+
+Direct launches return `"wrapper": null`. The frontend builds the display
+with DOM text nodes: `v1.3.2` for direct launches and
+`v1.3.2 (team-dotfill v1.0.1)` for wrapped launches. It must not insert wrapper
+metadata through `innerHTML`.
 
 ## Server and API Design
 
@@ -425,6 +500,8 @@ contents, session tokens, or other secret material may be written to
 The dashboard shows:
 
 - package version;
+- optional wrapper name/version beside the package version when supplied by a
+  wrapper entrypoint;
 - target `.env`;
 - collapsed `dotfill config` disclosure with final config/profile directory and open-folder action;
 - light/dark mode toggle;

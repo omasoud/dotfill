@@ -13,6 +13,9 @@ dotfill is a generic local-only utility for maintaining configured token and ide
 - Support config roots, profiles, and wrapper-style Python entrypoints.
 - Support wrapper entrypoints that lock a wrapper to one profile without
   wrapper-side command-line parsing.
+- Allow wrapper entrypoints to provide optional display name/version metadata
+  for the dashboard without changing dotfill's package identity or CLI
+  behavior.
 - Preserve `.env` comments, blank lines, ordering, unrelated variables, unrelated duplicates, and line endings.
 - Write only after explicit user action.
 - Create at most one backup per process session before the first write.
@@ -132,6 +135,23 @@ Supported sources:
 
 Windows AD detection returns generic facts only. It does not map facts to organization-specific identity names.
 
+Windows AD user lookup must work when the current user can reach a directory
+controller but the device does not expose a usable computer-domain default
+naming context. The lookup must:
+
+- prefer an explicit LDAP search root derived from a valid user directory DNS
+  domain, using `USERDNSDOMAIN` first and a valid `whoami /upn` suffix as a
+  fallback;
+- accept only DNS-safe domain hints before using them in an LDAP path or
+  generated PowerShell command;
+- retain serverless `DirectorySearcher` behavior only as a compatibility
+  fallback when no valid user-domain hint is available or the explicit bind
+  fails;
+- not search a different default naming context merely because a successful
+  explicit-domain search found no matching account; and
+- preserve generic fact output and non-secret diagnostics without embedding
+  any organization-specific domain.
+
 Resolution model:
 
 - `detected`: no explicit non-empty `.env` value exists, and the configured
@@ -170,6 +190,9 @@ Rules:
   and import-fill behavior.
 - Existing non-empty derived values may be reset to the computed default only
   through an explicit row-level user action.
+- The row-level default operation is idempotent: if a stale or repeated request
+  arrives after the value is already aligned with its computed default, it
+  succeeds without writing and reports no updated variables.
 - Disabled derived variables are not filled or written.
 
 Derived state values are:
@@ -368,6 +391,16 @@ dotfill --verbose
   `DOTFILL_PROFILE` do not select one.
 - `locked_profile="name"` forces a wrapper-owned profile.
 
+`run_dotfill(...)` may also accept paired `wrapper_name` and `wrapper_version`
+display metadata. Both values must be supplied together as non-empty strings.
+When omitted, direct dotfill behavior is unchanged. Wrapper display metadata:
+
+- is independent of `program_name`, which continues to control CLI help and
+  error output;
+- does not affect config, profile, target-path, command, or version resolution;
+- is propagated only to dashboard bootstrap/presentation state; and
+- is rendered as text, never interpreted as HTML.
+
 When `locked_profile` is set:
 
 - `config_root`, `env_path`, `argv`, `program_name`, and `before_config_load`
@@ -390,6 +423,12 @@ When `locked_profile` is set:
 - Reject unexpected `Origin` headers on mutating API requests.
 - Emit no permissive CORS headers.
 - Map domain errors to non-secret JSON responses.
+- Treat `POST /api/derived/{variable_name}/default` as an idempotent desired-state
+  operation: missing or diverged values are written, already-aligned values
+  return success with `updated = []`, unknown variables return `404`, and
+  unresolved or otherwise non-computable values return `409`.
+- Return optional wrapper display metadata from `/api/bootstrap` as a structured
+  object only when a wrapper supplied both values.
 
 ## Frontend Requirements
 
@@ -397,6 +436,12 @@ When `locked_profile` is set:
 - Keep the target `.env` path visually primary.
 - Show config directory in a collapsed `dotfill config` disclosure, including profile directory when a profile is active.
 - Render dynamic identities, derived variables, and services.
+- Disable a derived-variable default action immediately while its request is in
+  flight and suppress additional requests for the same row until it settles.
+- Show the package version as `v<dotfill-version>` for direct launches. When
+  wrapper metadata is present, append
+  ` (<wrapper-name> v<wrapper-version>)`, for example
+  `v1.3.2 (team-dotfill v1.0.1)`.
 - Render service icons from configured public service icon keys.
 - Fall back to the `key` icon if a referenced SVG symbol is unavailable at
   render time; backend config validation remains the primary guard against

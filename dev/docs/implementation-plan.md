@@ -394,6 +394,77 @@ to explicitly write computed defaults for missing or customized derived values.
 - [x] After implementation, update current-status and verification checklists
       to mark derived import-fill and dashboard default actions as implemented.
 
+## Planned: Explicit-Domain Windows AD Lookup
+
+Goal: resolve generic Windows AD facts on devices that can reach the user
+directory but do not provide a usable computer-domain default naming context.
+
+- [x] AD-BIND-01 Document the explicit-domain bind strategy, safe domain-hint
+      selection, compatibility fallback boundary, and neutral diagnostics.
+- [ ] AD-BIND-02 Add a failing regression test for a valid explicit user-domain
+      hint on a device where a serverless lookup is unavailable.
+- [ ] AD-BIND-03 Refactor the PowerShell probe to prefer a DNS-safe
+      `USERDNSDOMAIN`, fall back to a valid `whoami /upn` suffix, and root the
+      search at `LDAP://<dns-domain>`.
+- [ ] AD-BIND-04 Retain serverless lookup only when no valid hint exists or the
+      explicit bind/search raises; do not cross into the default context after
+      a successful explicit search returns no match.
+- [ ] AD-BIND-05 Preserve the existing generic fact protocol and surface safe
+      diagnostics when both explicit and compatibility lookup paths fail.
+- [ ] AD-BIND-06 Add focused tests for valid, missing, and unsafe hints;
+      explicit-root construction; exception fallback; no-match behavior; and
+      unchanged fact parsing.
+- [ ] AD-BIND-07 Verify the probe on a traditional domain-joined device and on
+      a cloud/hybrid-joined device with directory-controller reachability, then
+      run the full test suite.
+- [ ] AD-BIND-08 Update user-facing troubleshooting guidance after the behavior
+      is implemented, using only neutral domains and device descriptions.
+
+## Planned: Idempotent Derived Default Actions
+
+Goal: make rapid, repeated, or stale derived-default requests harmless and
+keep the dashboard from presenting a false failure after the first request
+already succeeded.
+
+- [x] DERIVED-IDEM-01 Document aligned requests as successful no-ops and define
+      the frontend per-variable in-flight guard.
+- [ ] DERIVED-IDEM-02 Add an API reproducer that posts the same missing-derived
+      default action twice and expects the second response to succeed with
+      `updated = []` while preserving the first value.
+- [ ] DERIVED-IDEM-03 Change the endpoint to return idempotent success for an
+      already-aligned value while retaining `404` for unknown/disabled targets
+      and `409` for unresolved/non-computable targets.
+- [ ] DERIVED-IDEM-04 Disable the clicked row action immediately and suppress a
+      second request for the same variable until the first request and refresh
+      settle.
+- [ ] DERIVED-IDEM-05 Add frontend regression coverage for the in-flight guard,
+      disabled state, retry after failure, and no error banner after an aligned
+      no-op response.
+- [ ] DERIVED-IDEM-06 Run focused API/frontend tests and the full test suite;
+      update user-facing troubleshooting text only if the corrected behavior
+      changes useful user guidance.
+
+## Planned: Wrapper Version Display Metadata
+
+Goal: let a wrapper identify its own command/version in the dashboard while
+keeping the dotfill package version visible and authoritative.
+
+- [x] WRAP-META-01 Document paired optional `wrapper_name`/`wrapper_version`
+      entrypoint inputs, bootstrap payload shape, and dashboard formatting.
+- [ ] WRAP-META-02 Add paired optional parameters to `run_dotfill(...)`, reject
+      partial or blank metadata, and keep `program_name` behavior independent.
+- [ ] WRAP-META-03 Propagate validated metadata through both dashboard launch
+      paths into `AppContext` and expose a structured nullable `wrapper` value
+      from `/api/bootstrap`.
+- [ ] WRAP-META-04 Render direct launches as `v<dotfill-version>` and wrapped
+      launches as
+      `v<dotfill-version> (<wrapper-name> v<wrapper-version>)` using text nodes.
+- [ ] WRAP-META-05 Add entrypoint, CLI propagation, API bootstrap, and static
+      frontend tests for absent, valid, partial, blank, and markup-like metadata.
+- [ ] WRAP-META-06 Update README and wrapper-author documentation with a neutral
+      `run_dotfill(...)` example after implementation, then run packaging and
+      full-suite verification.
+
 ## Future Roadmap
 
 - [ ] Add query-string service-test auth after redacted URL plumbing and tests
