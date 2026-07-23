@@ -21,6 +21,18 @@ Find the user config file path with:
 dotfill config path --user
 ```
 
+## The browser opens to a blank page
+
+Open the browser developer tools with `F12` and check the Console. If it says a
+module script was served as `text/plain`, the workstation maps `.js` files to
+the wrong MIME type. HTTP `200` or `304` entries in the Network tab do not mean
+the browser executed the module.
+
+Current dotfill versions explicitly serve packaged JavaScript as
+`application/javascript`, independent of host MIME mappings. Upgrade dotfill
+and restart it. The corrected entry-module URL uses a new cache key, but a hard
+refresh with `Ctrl+Shift+R` is also safe.
+
 ## dotfill is using the wrong config directory
 
 Check the resolved paths:

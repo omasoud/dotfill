@@ -481,6 +481,22 @@ keeping the dotfill package version visible and authoritative.
       `run_dotfill(...)` example after implementation, then run packaging and
       full-suite verification.
 
+## Implemented: Deterministic JavaScript MIME Type
+
+Goal: keep the local dashboard usable when host-level MIME configuration maps
+`.js` files to `text/plain`.
+
+- [x] STATIC-MIME-01 Document that packaged JavaScript assets must be served
+      with an explicit JavaScript media type independent of host MIME mappings.
+- [x] STATIC-MIME-02 Add a server regression test that forces the host `.js`
+      mapping to `text/plain` and still expects a JavaScript response type.
+- [x] STATIC-MIME-03 Override the static response media type for `.js` assets
+      without changing other static-file behavior.
+- [x] STATIC-MIME-04 Change the entry-module cache key so browsers do not reuse
+      a previously cached response with the invalid media type.
+- [x] STATIC-MIME-05 Run focused server/static tests and the full test suite,
+      then update troubleshooting and release-note documentation.
+
 ## Future Roadmap
 
 - [ ] Add query-string service-test auth after redacted URL plumbing and tests

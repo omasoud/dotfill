@@ -445,7 +445,7 @@ structured nullable value such as:
 
 ```json
 {
-  "version": "1.4.0",
+  "version": "1.4.1",
   "wrapper": {
     "name": "team-dotfill",
     "version": "1.0.1"
@@ -454,8 +454,8 @@ structured nullable value such as:
 ```
 
 Direct launches return `"wrapper": null`. The frontend builds the display
-with DOM text nodes: `v1.4.0` for direct launches and
-`v1.4.0 (team-dotfill v1.0.1)` for wrapped launches. It must not insert wrapper
+with DOM text nodes: `v1.4.1` for direct launches and
+`v1.4.1 (team-dotfill v1.0.1)` for wrapped launches. It must not insert wrapper
 metadata through `innerHTML`.
 
 ## Server and API Design
@@ -467,6 +467,12 @@ The local server binds to `127.0.0.1`.
 Mutating API requests reject unexpected non-local `Origin` headers. No CORS middleware is installed.
 
 FastAPI docs/OpenAPI routes are disabled.
+
+Before mounting the packaged static frontend, the server explicitly registers
+`.js` as `application/javascript`. This avoids host-level MIME configuration,
+including Windows registry mappings, causing module scripts to be returned as
+`text/plain` and rejected by the browser. The entry-module query key changes
+when its cached response must be invalidated.
 
 ## Frontend Design
 

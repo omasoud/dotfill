@@ -8,6 +8,13 @@ format.
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-07-23
+
+### Fixed
+
+- Made packaged JavaScript responses use an explicit JavaScript media type so
+  host-level `.js` mappings cannot leave the local dashboard blank.
+
 ## [1.4.0] - 2026-07-18
 
 ### Added
@@ -136,7 +143,8 @@ format.
   and web UI.
 - Added MIT licensing and PyPI publishing project metadata.
 
-[Unreleased]: https://github.com/omasoud/dotfill/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/omasoud/dotfill/compare/v1.4.1...HEAD
+[1.4.1]: https://github.com/omasoud/dotfill/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/omasoud/dotfill/compare/v1.3.2...v1.4.0
 [1.3.2]: https://github.com/omasoud/dotfill/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/omasoud/dotfill/compare/v1.3.0...v1.3.1

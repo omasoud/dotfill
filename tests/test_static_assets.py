@@ -145,6 +145,12 @@ def test_frontend_uses_local_svg_favicon() -> None:
     assert "stroke=" in favicon_text
 
 
+def test_frontend_entry_module_uses_current_cache_key() -> None:
+    index_text = STATIC_DIR.joinpath("index.html").read_text(encoding="utf-8")
+
+    assert '<script type="module" src="/app.js?v=9"></script>' in index_text
+
+
 def test_public_service_icons_have_bundled_sprite_symbols() -> None:
     sprite_keys = _sprite_icon_keys()
 

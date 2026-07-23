@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import mimetypes
 import socket
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from .api import AppContext, create_app
 log = logging.getLogger(__name__)
 
 _BIND_HOST = "127.0.0.1"
+_JAVASCRIPT_MEDIA_TYPE = "application/javascript"
 
 
 def pick_free_port() -> int:
@@ -27,10 +29,16 @@ def static_dir() -> Path:
     return Path(__file__).resolve().parent / "static"
 
 
+def _configure_static_media_types() -> None:
+    """Keep packaged JavaScript responses independent of host MIME mappings."""
+    mimetypes.add_type(_JAVASCRIPT_MEDIA_TYPE, ".js", strict=True)
+
+
 def build_full_app(ctx: AppContext) -> FastAPI:
     app = create_app(ctx)
     static = static_dir()
     if static.exists():
+        _configure_static_media_types()
         app.mount(
             "/",
             StaticFiles(directory=str(static), html=True),

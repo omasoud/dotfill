@@ -423,6 +423,8 @@ When `locked_profile` is set:
 - Reject unexpected `Origin` headers on mutating API requests.
 - Emit no permissive CORS headers.
 - Map domain errors to non-secret JSON responses.
+- Serve packaged `.js` assets with an explicit JavaScript media type instead of
+  inheriting host or operating-system MIME mappings.
 - Treat `POST /api/derived/{variable_name}/default` as an idempotent desired-state
   operation: missing or diverged values are written, already-aligned values
   return success with `updated = []`, unknown variables return `404`, and
@@ -441,7 +443,7 @@ When `locked_profile` is set:
 - Show the package version as `v<dotfill-version>` for direct launches. When
   wrapper metadata is present, append
   ` (<wrapper-name> v<wrapper-version>)`, for example
-  `v1.4.0 (team-dotfill v1.0.1)`.
+  `v1.4.1 (team-dotfill v1.0.1)`.
 - Render service icons from configured public service icon keys.
 - Fall back to the `key` icon if a referenced SVG symbol is unavailable at
   render time; backend config validation remains the primary guard against
