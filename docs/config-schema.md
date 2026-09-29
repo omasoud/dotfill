@@ -137,23 +137,27 @@ lookup is stalled.
 ### Entra detector
 
 The `entra` detector asks the Windows sign-in broker for a Microsoft Graph
-token silently. It never shows a sign-in, account-picker, or consent prompt.
-It reads only `mail`, `userPrincipalName`, and `proxyAddresses` from Graph
-`/me`; non-SMTP proxy addresses such as `X500:` are ignored.
+token silently, through Microsoft's MSAL library inside the dotfill process;
+it starts no PowerShell or other child process. It never shows a sign-in,
+account-picker, or consent prompt. It reads only `mail`, `userPrincipalName`,
+and `proxyAddresses` from Graph `/me`; non-SMTP proxy addresses such as
+`X500:` are ignored. The lookup has a 20-second limit. If the underlying call
+outlives that limit, retries wait for it to finish before starting another
+lookup; expired work does not start additional token or Graph requests.
 
 - Without `client_id`, dotfill uses Microsoft's public Azure CLI client ID
-  (`04b07795-8ddb-461a-bbee-02f9e1bf7b46`) and requests the Microsoft Graph
-  resource. This needs no app registration, but it is best-effort: tenant
-  policy can require interaction or block the client.
+  (`04b07795-8ddb-461a-bbee-02f9e1bf7b46`) and requests the
+  `https://graph.microsoft.com/.default` scope. This needs no app
+  registration, but it is best-effort: tenant policy can require interaction
+  or block the client.
 - Tokens for that built-in client carry the client's broad pre-authorized
-  delegated permissions, not just `User.Read`. dotfill keeps the token inside a
-  short-lived helper process for one `/me` call; it is never logged, written,
-  cached by dotfill, or returned to dotfill's API or browser. Only a dedicated
-  app registration consented for `User.Read` alone yields a least-privilege
-  token.
+  delegated permissions, not just `User.Read`. dotfill uses the token only for
+  one `/me` request; it is never logged, written, cached by dotfill, or
+  returned to dotfill's API or browser. Only a dedicated app registration
+  consented for `User.Read` alone yields a least-privilege token.
 - With `client_id`, dotfill requests `User.Read` for that app registration.
   Register it as a public client with the delegated `User.Read` permission and
-  the Web Account Manager redirect URI
+  the broker redirect URI
   `ms-appx-web://Microsoft.AAD.BrokerPlugin/<client-id>`.
 - `tenant` selects the authority: `organizations` (default), a tenant GUID, or
   a tenant DNS domain.

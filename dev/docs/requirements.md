@@ -225,13 +225,13 @@ The `entra` detector:
 - runs only on Windows and reports a non-secret unavailable diagnostic on other
   platforms;
 - obtains a Microsoft Graph access token for the signed-in work or school
-  account silently through the Windows Web Account Manager. It never shows an
-  interactive sign-in, account-picker, or consent prompt, and uses exactly one
-  request form per client mode, with no automatic format fallback:
-  - built-in client ID: the Microsoft Graph resource without a scope, the only
-    form that the built-in client ID is pre-authorized for;
-  - configured `client_id`: the delegated `User.Read` scope with the Microsoft
-    Graph resource;
+  account silently through the Windows sign-in broker, using Microsoft's MSAL
+  broker library in process. It starts no PowerShell or other child process,
+  never shows an interactive sign-in, account-picker, or consent prompt, and
+  uses exactly one scope set per client mode, with no automatic fallback:
+  - built-in client ID: `https://graph.microsoft.com/.default`, the only form
+    that the built-in client ID is pre-authorized for;
+  - configured `client_id`: the delegated `User.Read` scope;
 - does not claim least privilege for the built-in client ID: its tokens carry
   that client's broad pre-authorized delegated scopes. Only a configured app
   registration that is consented for `User.Read` alone can yield a
@@ -247,8 +247,13 @@ The `entra` detector:
   `/me`, keeps only SMTP proxy addresses (other types such as `X500:` are
   ignored), and normalizes them like Windows AD facts; `otherMails` is
   ignored;
-- keeps the access token inside the helper process: it is never logged,
-  written, cached by dotfill, or returned to Python, the API, or the browser;
+- uses the access token only for that single `/me` request: it is never
+  logged, written, cached by dotfill (the Windows broker keeps its own cache),
+  included in diagnostics or results, or returned to the API or browser;
+- enforces a hard overall timeout, so a hung broker or Graph call fails the
+  lookup instead of blocking detection. Timed-out work remains single-flight
+  until the worker exits, including across config changes. Expired work must
+  not start another token or Graph request or supply a late successful result;
   and
 - contacts only the Microsoft identity platform and Microsoft Graph, only when
   enabled in config. It is not a dotfill-operated backend.

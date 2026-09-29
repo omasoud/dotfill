@@ -5,99 +5,189 @@ from __future__ import annotations
 import logging
 import re
 import subprocess
+import sys
+import threading
+from types import SimpleNamespace
+from typing import Any
 
+import httpx
 import pytest
+import respx
 
 from dotfill import identity_entra
 from dotfill.config_models import EntraDetectorConfig
+from dotfill.identity_detectors import DetectionRequest, DetectorRunner, DetectorSpec
 from dotfill.identity_entra import (
     BUILTIN_CLIENT_ID,
-    build_helper_script,
+    GRAPH_ME_URL,
     detect_entra,
-    parse_helper_output,
+    entra_authority,
+    entra_scopes,
+    token_error_message,
 )
 
 _FAKE_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJzY3AiOiJVc2VyLlJlYWQifQ.c2lnbmF0dXJl"
+_CONFIGURED_ID = "00000000-0000-0000-0000-00000000abcd"
 
 
-def test_builtin_client_uses_resource_form_without_scope() -> None:
-    script = build_helper_script(EntraDetectorConfig(enabled=True))
-
-    assert f"::new($provider, '', '{BUILTIN_CLIENT_ID}')" in script
-    assert "@('resource', 'https://graph.microsoft.com')" in script
-    assert "FindAccountProviderAsync('https://login.microsoft.com', 'organizations')" in script
+class RedirectUriError(ValueError):
+    """Stand-in with the same name as `msal.broker.RedirectUriError`."""
 
 
-def test_configured_client_uses_user_read_with_resource() -> None:
-    client_id = "00000000-0000-0000-0000-00000000abcd"
+class FakeApp:
+    """Records `acquire_token_interactive` calls and returns a scripted result."""
 
-    script = build_helper_script(EntraDetectorConfig(enabled=True, client_id=client_id))
+    CONSOLE_WINDOW_HANDLE = object()
 
-    assert f"::new($provider, 'User.Read', '{client_id}')" in script
-    assert "@('resource', 'https://graph.microsoft.com')" in script
-    assert BUILTIN_CLIENT_ID not in script
+    def __init__(self, result: object = None, *, raises: BaseException | None = None) -> None:
+        self.result = result if result is not None else {"access_token": _FAKE_TOKEN}
+        self.raises = raises
+        self.calls: list[dict[str, Any]] = []
 
-
-def test_tenant_selects_authority() -> None:
-    tenant = "11111111-2222-3333-4444-555555555555"
-
-    script = build_helper_script(EntraDetectorConfig(enabled=True, tenant=tenant))
-
-    assert f"'https://login.microsoftonline.com/{tenant}'" in script
-
-
-@pytest.mark.parametrize(
-    "settings",
-    [
-        EntraDetectorConfig(client_id="not-a-guid'; Write-Output x"),
-        EntraDetectorConfig(tenant="bad tenant'; x"),
-    ],
-)
-def test_unsafe_settings_are_rejected_before_interpolation(
-    settings: EntraDetectorConfig,
-) -> None:
-    with pytest.raises(ValueError):
-        build_helper_script(settings)
+    def acquire_token_interactive(self, scopes: list[str], **kwargs: Any) -> object:
+        self.calls.append({"scopes": scopes, **kwargs})
+        if self.raises is not None:
+            raise self.raises
+        return dict(self.result) if isinstance(self.result, dict) else self.result
 
 
-def test_helper_is_silent_only_with_a_single_request_form() -> None:
-    script = build_helper_script(EntraDetectorConfig(enabled=True))
-
-    assert "RequestTokenAsync" not in script
-    assert script.count("GetTokenSilentlyAsync") == 1
-    assert script.count("WebTokenRequest]::new(") == 1
-    assert "AADSTS65002" in script
-    assert "Fail 'client_not_authorized'" in script
+@pytest.fixture
+def on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(identity_entra, "_on_windows", lambda: True)
 
 
-def test_helper_never_outputs_the_token() -> None:
-    script = build_helper_script(EntraDetectorConfig(enabled=True))
+@pytest.fixture
+def no_child_processes(monkeypatch: pytest.MonkeyPatch) -> None:
+    def forbid(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("the Entra detector must not start child processes")
 
-    output_lines = [line for line in script.splitlines() if "Write-Output" in line]
-    assert output_lines
-    assert all("$token" not in line for line in output_lines)
-    token_uses = [line.strip() for line in script.splitlines() if "$token" in line]
-    assert token_uses == [
-        "$token = $result.ResponseData[0].Token",
-        (
-            "$me = Invoke-RestMethod -Uri 'https://graph.microsoft.com/v1.0/me?$select="
-            "mail,userPrincipalName,proxyAddresses' -Headers @{ Authorization = "
-            "('Bearer ' + $token) } -TimeoutSec 10"
-        ),
-        "$token = $null",
-        "$token = $null",
-    ]
-    assert "smtp:" in script
+    monkeypatch.setattr(subprocess, "run", forbid)
+    monkeypatch.setattr(subprocess, "Popen", forbid)
 
 
-def test_parse_success_keeps_smtp_addresses_and_is_complete() -> None:
-    result = parse_helper_output(
-        "MAIL:Person@Example.com\n"
-        "UPN:login@example.org\n"
-        "PROXY:person@example.com\n"
-        "PROXY:alias@other.example\n"
-        "GRAPH:ok\n"
+def _use_app(monkeypatch: pytest.MonkeyPatch, app: FakeApp) -> list[tuple[str, str]]:
+    created: list[tuple[str, str]] = []
+
+    def create(client_id: str, authority: str) -> FakeApp:
+        created.append((client_id, authority))
+        return app
+
+    monkeypatch.setattr(identity_entra, "_create_app", create)
+    return created
+
+
+def _graph_ok(payload: dict[str, object] | None = None) -> respx.Route:
+    return respx.get(GRAPH_ME_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=payload
+            or {
+                "mail": "Person@Example.com",
+                "userPrincipalName": "login@example.org",
+                "proxyAddresses": [
+                    "SMTP:person@example.com",
+                    "smtp:alias@other.example",
+                    "X500:/o=example/ou=exchange/cn=recipients/cn=person",
+                ],
+            },
+        )
     )
+
+
+# ---- request construction -------------------------------------------------
+
+
+def test_builtin_client_requests_graph_default_scope() -> None:
+    settings = EntraDetectorConfig(enabled=True)
+
+    assert entra_scopes(settings) == ["https://graph.microsoft.com/.default"]
+    assert entra_authority(settings) == "https://login.microsoftonline.com/organizations"
+
+
+def test_configured_client_requests_user_read() -> None:
+    settings = EntraDetectorConfig(enabled=True, client_id=_CONFIGURED_ID, tenant="contoso.example.com")
+
+    assert entra_scopes(settings) == ["User.Read"]
+    assert entra_authority(settings) == "https://login.microsoftonline.com/contoso.example.com"
+
+
+def test_msal_authority_requests_have_a_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    options: dict[str, Any] = {}
+
+    def create(_client_id: str, **kwargs: Any) -> FakeApp:
+        options.update(kwargs)
+        return FakeApp()
+
+    monkeypatch.setitem(sys.modules, "msal", SimpleNamespace(PublicClientApplication=create))
+    identity_entra._create_app(BUILTIN_CLIENT_ID, entra_authority(EntraDetectorConfig()))
+
+    assert options["enable_broker_on_windows"] is True
+    assert 0 < options["timeout"] <= identity_entra.ENTRA_TIMEOUT_SECONDS
+
+
+@respx.mock
+def test_builtin_lookup_is_silent_only_in_process(
+    monkeypatch: pytest.MonkeyPatch, on_windows: None, no_child_processes: None
+) -> None:
+    app = FakeApp()
+    created = _use_app(monkeypatch, app)
+    route = _graph_ok()
+
+    result = detect_entra(EntraDetectorConfig(enabled=True))
+
+    assert result.outcome == "complete"
+    assert created == [(BUILTIN_CLIENT_ID, "https://login.microsoftonline.com/organizations")]
+    assert len(app.calls) == 1
+    call = app.calls[0]
+    assert call["scopes"] == ["https://graph.microsoft.com/.default"]
+    assert call["prompt"] == "none"
+    assert call["parent_window_handle"] is FakeApp.CONSOLE_WINDOW_HANDLE
+    with pytest.raises(Exception, match="browser"):
+        call["on_before_launching_ui"](ui="browser")
+    assert route.calls.last.request.headers["Authorization"] == f"Bearer {_FAKE_TOKEN}"
+
+
+@respx.mock
+def test_configured_client_lookup_uses_its_id_and_user_read(
+    monkeypatch: pytest.MonkeyPatch, on_windows: None
+) -> None:
+    app = FakeApp()
+    created = _use_app(monkeypatch, app)
+    _graph_ok()
+
+    detect_entra(EntraDetectorConfig(enabled=True, client_id=_CONFIGURED_ID))
+
+    assert created[0][0] == _CONFIGURED_ID
+    assert app.calls[0]["scopes"] == ["User.Read"]
+
+
+def test_failed_token_request_is_not_retried_with_other_scopes(
+    monkeypatch: pytest.MonkeyPatch, on_windows: None
+) -> None:
+    app = FakeApp(
+        {
+            "error": "broker_error",
+            "error_description": "(pii). Status: Response_Status.Status_IncorrectConfiguration, "
+            "Error code: 3399614466, Tag: 557973643",
+        }
+    )
+    _use_app(monkeypatch, app)
+
+    result = detect_entra(EntraDetectorConfig(enabled=True))
+
+    assert len(app.calls) == 1
+    assert result.facts.diagnostics == ["entra: client not authorized for Microsoft Graph"]
+
+
+# ---- Graph response parsing ------------------------------------------------
+
+
+@respx.mock
+def test_success_keeps_smtp_addresses_only(monkeypatch: pytest.MonkeyPatch, on_windows: None) -> None:
+    _use_app(monkeypatch, FakeApp())
+    _graph_ok()
+
+    result = detect_entra(EntraDetectorConfig(enabled=True))
 
     assert result.detector == "entra"
     assert result.outcome == "complete"
@@ -109,44 +199,130 @@ def test_parse_success_keeps_smtp_addresses_and_is_complete() -> None:
     assert result.facts.diagnostics == []
 
 
-def test_parse_ignores_unknown_and_token_like_lines() -> None:
-    result = parse_helper_output(f"{_FAKE_TOKEN}\nnoise\nMAIL:a@example.com\nGRAPH:ok\n")
-
-    assert result.outcome == "complete"
-    assert result.facts.emails == ["a@example.com"]
-    assert _FAKE_TOKEN not in repr(result)
-
-
+@respx.mock
 @pytest.mark.parametrize(
-    ("output", "diagnostic"),
+    ("response", "diagnostic"),
     [
-        ("ERR:interaction_required", "entra: sign-in interaction required"),
-        ("ERR:client_not_authorized", "entra: client not authorized for Microsoft Graph"),
-        ("ERR:no_account_provider", "entra: no work or school account available"),
-        ("ERR:winrt_unavailable", "entra: Windows sign-in broker unavailable"),
-        ("ERR:token_failed:ProviderError", "entra: token request failed (ProviderError)"),
-        ("ERR:graph_failed:403", "entra: Microsoft Graph request failed (403)"),
-        ("ERR:graph_failed:has spaces and stuff", "entra: Microsoft Graph request failed"),
-        ("ERR:something_new", "entra: lookup failed"),
-        ("", "entra: lookup returned no result"),
+        (httpx.Response(403), "entra: Microsoft Graph request failed (403)"),
+        (httpx.Response(200, text="not json"), "entra: Microsoft Graph returned an invalid response"),
+        (httpx.Response(200, json=["list"]), "entra: Microsoft Graph returned an invalid response"),
     ],
 )
-def test_parse_failures_map_to_short_diagnostics(output: str, diagnostic: str) -> None:
-    result = parse_helper_output(output)
+def test_graph_failures_map_to_short_diagnostics(
+    monkeypatch: pytest.MonkeyPatch, on_windows: None, response: httpx.Response, diagnostic: str
+) -> None:
+    _use_app(monkeypatch, FakeApp())
+    respx.get(GRAPH_ME_URL).mock(return_value=response)
+
+    result = detect_entra(EntraDetectorConfig(enabled=True))
 
     assert result.outcome == "failed"
-    assert result.facts.emails == []
     assert result.facts.diagnostics == [diagnostic]
 
 
-def test_error_line_wins_over_success_marker() -> None:
-    result = parse_helper_output("MAIL:a@example.com\nERR:graph_failed:500\nGRAPH:ok\n")
+@respx.mock
+def test_graph_transport_error_is_short_diagnostic(
+    monkeypatch: pytest.MonkeyPatch, on_windows: None
+) -> None:
+    _use_app(monkeypatch, FakeApp())
+    respx.get(GRAPH_ME_URL).mock(side_effect=httpx.ConnectError("boom"))
 
-    assert result.outcome == "failed"
+    result = detect_entra(EntraDetectorConfig(enabled=True))
+
+    assert result.facts.diagnostics == ["entra: Microsoft Graph request failed"]
 
 
-def test_detect_entra_unavailable_off_windows(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(identity_entra.sys, "platform", "linux")
+# ---- token errors ----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("result", "diagnostic"),
+    [
+        ({"_broker_status": "Response_Status.Status_InteractionRequired"}, "entra: sign-in interaction required"),
+        ({"error_description": "x. Status: Response_Status.Status_AccountUnusable, y"}, "entra: sign-in interaction required"),
+        ({"error_description": "Status: Response_Status.Status_IncorrectConfiguration"}, "entra: client not authorized for Microsoft Graph"),
+        ({"error_description": "AADSTS65002: consent must be configured"}, "entra: client not authorized for Microsoft Graph"),
+        ({"error_description": "Status: Response_Status.Status_NoNetwork"}, "entra: sign-in service unreachable"),
+        ({"error_description": "Status: Response_Status.Status_DeviceNotRegistered"}, "entra: no work or school account available"),
+        ({"error_description": "Status: Response_Status.Status_Unexpected, secret-ish detail"}, "entra: token request failed (Status_Unexpected)"),
+        ({"error": "interaction_required", "error_description": "AADSTS50076 MFA"}, "entra: sign-in interaction required"),
+        ({"error": "invalid_grant", "error_description": "anything"}, "entra: token request failed"),
+    ],
+)
+def test_token_errors_map_without_raw_text(result: dict[str, object], diagnostic: str) -> None:
+    assert token_error_message(result) == diagnostic
+
+
+@pytest.mark.parametrize(
+    ("raises", "diagnostic"),
+    [
+        (RedirectUriError("needs ms-appx-web://..."), "entra: client_id is missing the broker redirect URI"),
+        (ValueError("other"), "entra: token request failed"),
+        (RuntimeError("boom"), "entra: lookup failed (RuntimeError)"),
+    ],
+)
+def test_token_request_exceptions_map_to_short_diagnostics(
+    monkeypatch: pytest.MonkeyPatch, on_windows: None, raises: BaseException, diagnostic: str
+) -> None:
+    _use_app(monkeypatch, FakeApp(raises=raises))
+
+    result = detect_entra(EntraDetectorConfig(enabled=True))
+
+    assert result.facts.diagnostics == [diagnostic]
+
+
+@pytest.mark.parametrize(
+    ("ui", "diagnostic"),
+    [
+        ("browser", "entra: Windows sign-in broker unavailable"),
+        ("broker", "entra: sign-in interaction required"),
+    ],
+)
+def test_ui_launch_attempt_is_blocked_and_reported(
+    monkeypatch: pytest.MonkeyPatch, on_windows: None, ui: str, diagnostic: str
+) -> None:
+    class UiApp(FakeApp):
+        def acquire_token_interactive(self, scopes: list[str], **kwargs: Any) -> object:
+            kwargs["on_before_launching_ui"](ui=ui)
+            raise AssertionError("UI must never launch")
+
+    _use_app(monkeypatch, UiApp())
+
+    result = detect_entra(EntraDetectorConfig(enabled=True))
+
+    assert result.facts.diagnostics == [diagnostic]
+
+
+def test_network_exception_from_msal_is_unreachable(
+    monkeypatch: pytest.MonkeyPatch, on_windows: None
+) -> None:
+    connection_error = type("ConnectionError", (OSError,), {"__module__": "requests.exceptions"})
+
+    def create(_client_id: str, _authority: str) -> FakeApp:
+        raise connection_error("offline")
+
+    monkeypatch.setattr(identity_entra, "_create_app", create)
+
+    result = detect_entra(EntraDetectorConfig(enabled=True))
+
+    assert result.facts.diagnostics == ["entra: sign-in service unreachable"]
+
+
+def test_missing_broker_library_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, on_windows: None
+) -> None:
+    def create(_client_id: str, _authority: str) -> FakeApp:
+        raise ImportError("No module named 'msal'")
+
+    monkeypatch.setattr(identity_entra, "_create_app", create)
+
+    result = detect_entra(EntraDetectorConfig(enabled=True))
+
+    assert result.facts.diagnostics == ["entra: Windows sign-in broker unavailable"]
+
+
+def test_unavailable_off_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(identity_entra, "_on_windows", lambda: False)
 
     result = detect_entra(EntraDetectorConfig(enabled=True))
 
@@ -154,66 +330,178 @@ def test_detect_entra_unavailable_off_windows(monkeypatch: pytest.MonkeyPatch) -
     assert result.facts.diagnostics == ["entra: unavailable on this platform"]
 
 
-def test_detect_entra_timeout_is_short_diagnostic(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(identity_entra.sys, "platform", "win32")
-
-    def timeout(_script: str) -> str:
-        raise subprocess.TimeoutExpired(cmd=["powershell.exe", "-EncodedCommand", "x"], timeout=20)
-
-    monkeypatch.setattr(identity_entra, "_run_helper", timeout)
-
-    result = detect_entra(EntraDetectorConfig(enabled=True))
-
-    assert result.facts.diagnostics == ["entra: lookup timed out after 20s"]
-
-
-def test_detect_entra_missing_powershell(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(identity_entra.sys, "platform", "win32")
-
-    def missing(_script: str) -> str:
-        raise FileNotFoundError("powershell.exe")
-
-    monkeypatch.setattr(identity_entra, "_run_helper", missing)
-
-    result = detect_entra(EntraDetectorConfig(enabled=True))
-
-    assert result.facts.diagnostics == ["entra: Windows PowerShell unavailable"]
-
-
-def test_detect_entra_success_keeps_token_out_of_logs(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+def test_hung_lookup_times_out_without_blocking(
+    monkeypatch: pytest.MonkeyPatch, on_windows: None
 ) -> None:
-    monkeypatch.setattr(identity_entra.sys, "platform", "win32")
-    monkeypatch.setattr(
-        identity_entra,
-        "_run_helper",
-        lambda _script: f"{_FAKE_TOKEN}\nMAIL:user@example.com\nGRAPH:ok\n",
-    )
+    release = threading.Event()
+    workers: list[threading.Thread] = []
 
-    with caplog.at_level(logging.DEBUG):
+    class HangingApp(FakeApp):
+        def acquire_token_interactive(self, scopes: list[str], **kwargs: Any) -> object:
+            workers.append(threading.current_thread())
+            release.wait(5)
+            return {"error": "late"}
+
+    _use_app(monkeypatch, HangingApp())
+    monkeypatch.setattr(identity_entra, "ENTRA_TIMEOUT_SECONDS", 0.05)
+
+    try:
         result = detect_entra(EntraDetectorConfig(enabled=True))
+    finally:
+        release.set()
+        for worker in workers:
+            worker.join(5)
+
+    assert result.facts.diagnostics == ["entra: lookup timed out after 0.05s"]
+
+
+@pytest.mark.parametrize("blocked_stage", ["authority", "broker", "graph"])
+@pytest.mark.parametrize("changed_config", [False, True])
+def test_timed_out_lookup_blocks_retries_until_worker_exits(
+    monkeypatch: pytest.MonkeyPatch,
+    on_windows: None,
+    blocked_stage: str,
+    changed_config: bool,
+) -> None:
+    release = threading.Event()
+    workers: list[threading.Thread] = []
+    created: list[str] = []
+    graph_calls: list[str] = []
+    now = [0.0]
+
+    def block(stage: str) -> None:
+        if stage == blocked_stage and not release.is_set():
+            workers.append(threading.current_thread())
+            assert release.wait(5), "test must release the stalled lookup"
+
+    class SlowApp(FakeApp):
+        def acquire_token_interactive(self, scopes: list[str], **kwargs: Any) -> object:
+            block("broker")
+            return super().acquire_token_interactive(scopes, **kwargs)
+
+    app = SlowApp()
+
+    def create(client_id: str, _authority: str) -> FakeApp:
+        created.append(client_id)
+        block("authority")
+        return app
+
+    def graph(url: str, **_kwargs: Any) -> httpx.Response:
+        graph_calls.append(url)
+        block("graph")
+        return httpx.Response(200, json={"mail": "user@example.com"})
+
+    def request(settings: EntraDetectorConfig) -> DetectionRequest:
+        return DetectionRequest(
+            order=["entra"], settings={"entra": settings}, pinned=frozenset({"entra"})
+        )
+
+    monkeypatch.setattr(identity_entra, "_create_app", create)
+    monkeypatch.setattr(identity_entra.httpx, "get", graph)
+    monkeypatch.setattr(identity_entra, "ENTRA_TIMEOUT_SECONDS", 0.05)
+    runner = DetectorRunner(
+        specs={"entra": DetectorSpec("entra", detect_entra, 0.05)},
+        clock=lambda: now[0],
+    )
+    settings = EntraDetectorConfig(enabled=True)
+    retry_settings = (
+        EntraDetectorConfig(enabled=True, client_id=_CONFIGURED_ID)
+        if changed_config else settings
+    )
+    try:
+        first = runner.detect(request(settings), wait=None)
+        assert first.results["entra"].facts.diagnostics == [
+            "entra: lookup timed out after 0.05s"
+        ]
+        now[0] = 60.0
+        retry = runner.detect(request(retry_settings), wait=None)
+        assert retry.results["entra"].facts.diagnostics == [
+            "entra: previous lookup still running"
+        ]
+        assert created == [BUILTIN_CLIENT_ID]
+        assert len(workers) == 1
+    finally:
+        release.set()
+        for worker in workers:
+            worker.join(5)
+
+    assert all(not worker.is_alive() for worker in workers)
+    # Expired authority/broker work must not advance to another request.
+    assert len(app.calls) == (0 if blocked_stage == "authority" else 1)
+    assert len(graph_calls) == (1 if blocked_stage == "graph" else 0)
+
+    now[0] = 180.0
+    recovered = runner.detect(request(retry_settings), wait=None)
+    assert recovered.results["entra"].outcome == "complete"
+    assert recovered.results["entra"].facts.emails == ["user@example.com"]
+    assert created == [BUILTIN_CLIENT_ID, retry_settings.client_id or BUILTIN_CLIENT_ID]
+
+
+@respx.mock
+def test_graph_timeout_uses_remaining_lookup_budget(
+    monkeypatch: pytest.MonkeyPatch, on_windows: None
+) -> None:
+    now = [0.0]
+
+    class SlowApp(FakeApp):
+        def acquire_token_interactive(self, scopes: list[str], **kwargs: Any) -> object:
+            now[0] = identity_entra.ENTRA_TIMEOUT_SECONDS - 3.0
+            return super().acquire_token_interactive(scopes, **kwargs)
+
+    monkeypatch.setattr(identity_entra, "monotonic", lambda: now[0])
+    _use_app(monkeypatch, SlowApp())
+    route = _graph_ok()
+
+    result = detect_entra(EntraDetectorConfig(enabled=True))
 
     assert result.outcome == "complete"
-    assert result.facts.emails == ["user@example.com"]
-    assert _FAKE_TOKEN not in caplog.text
-    assert not re.search(r"eyJ[A-Za-z0-9_-]+\.", caplog.text)
+    assert set(route.calls.last.request.extensions["timeout"].values()) == {3.0}
 
 
-def test_run_helper_uses_encoded_windows_powershell(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
+@respx.mock
+def test_worker_start_failure_does_not_block_later_lookups(
+    monkeypatch: pytest.MonkeyPatch, on_windows: None
+) -> None:
+    def fail_to_start(_thread: threading.Thread) -> None:
+        raise RuntimeError("cannot start thread")
 
-    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        captured["args"] = args
-        captured["kwargs"] = kwargs
-        return subprocess.CompletedProcess(args, 0, stdout="GRAPH:ok\n", stderr="")
+    _use_app(monkeypatch, FakeApp())
+    _graph_ok()
+    with monkeypatch.context() as failing:
+        failing.setattr(threading.Thread, "start", fail_to_start)
+        with pytest.raises(RuntimeError, match="cannot start thread"):
+            detect_entra(EntraDetectorConfig(enabled=True))
 
-    monkeypatch.setattr(identity_entra, "_windows_powershell", lambda: "powershell.exe")
-    monkeypatch.setattr(identity_entra.subprocess, "run", fake_run)
+    assert detect_entra(EntraDetectorConfig(enabled=True)).outcome == "complete"
 
-    out = identity_entra._run_helper("Write-Output 'x'")
 
-    args = captured["args"]
-    assert isinstance(args, list)
-    assert args[:4] == ["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand"]
-    assert captured["kwargs"]["timeout"] == identity_entra.ENTRA_TIMEOUT_SECONDS
-    assert out == "GRAPH:ok\n"
+# ---- secret boundary -------------------------------------------------------
+
+
+@respx.mock
+def test_token_never_reaches_logs_results_or_diagnostics(
+    monkeypatch: pytest.MonkeyPatch, on_windows: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    _use_app(monkeypatch, FakeApp())
+    _graph_ok()
+
+    with caplog.at_level(logging.DEBUG):
+        ok = detect_entra(EntraDetectorConfig(enabled=True))
+    respx.get(GRAPH_ME_URL).mock(return_value=httpx.Response(500))
+    with caplog.at_level(logging.DEBUG):
+        failed = detect_entra(EntraDetectorConfig(enabled=True))
+
+    for text in (caplog.text, repr(ok), repr(failed)):
+        assert _FAKE_TOKEN not in text
+        assert not re.search(r"eyJ[A-Za-z0-9_-]+\.", text)
+
+
+def test_module_has_no_subprocess_or_powershell_usage() -> None:
+    source = (
+        __import__("pathlib").Path(identity_entra.__file__).read_text(encoding="utf-8")
+    )
+
+    assert "subprocess" not in source
+    assert "powershell.exe" not in source.lower()
+    assert "pwsh" not in source.lower()
+    assert "EncodedCommand" not in source

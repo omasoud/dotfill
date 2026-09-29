@@ -93,9 +93,10 @@ This document records the current implementation state, verification expectation
       outcome-based caching (`complete`/`partial`/`failed`) and backoff; the
       dashboard shows pending detection, polls within a server deadline, and
       rechecks when a retry is due or the page becomes visible.
-- [x] The Entra detector silently reads Graph `/me` through Web Account
-      Manager with a fixed request form per client mode, keeps only SMTP
-      proxy addresses, and confines the token to its helper process.
+- [x] The Entra detector silently reads Graph `/me` through MSAL's Windows
+      broker in process (no child process), with a fixed scope set per client
+      mode, keeps only SMTP proxy addresses, and never logs or stores the
+      token.
 - [x] The Windows AD detector reads SAM name and UPN in-process and reports
       short timeout diagnostics without the generated script.
 
@@ -768,6 +769,65 @@ from PyPI. The manual device/VPN checks above remain open.
       current-status and verification checklists, add a CHANGELOG entry, and
       release a minor version so wrapper packages can raise their dotfill
       floor.
+
+## Implemented: Entra Detector via MSAL Broker
+
+Goal: remove the Windows PowerShell helper from the Entra detector so endpoint
+security tools do not flag dotfill. The 1.5.0 helper runs
+`powershell.exe -EncodedCommand` from `python.exe` with a token-acquisition
+script, which matches common EDR and AMSI heuristics. The detector instead
+calls Microsoft's broker library (MSAL Python with `pymsalruntime`) in
+process, the supported path that Azure CLI also uses on Windows, and reads
+Graph `/me` with `httpx`. Detector behavior, diagnostics, and fallbacks are
+otherwise unchanged.
+
+Field evidence (2026-09-29, one cloud-joined device): MSAL 1.39.0 with
+`pymsalruntime` 0.20.6 on Python 3.14 obtained tokens silently with
+`acquire_token_interactive(prompt="none")`, never reaching the UI hook. The
+built-in client ID worked with `https://graph.microsoft.com/.default` and
+failed on `User.Read` with broker status `Status_IncorrectConfiguration`
+(error code `0xCAA20002`). A consented public client worked with `User.Read`.
+The first token took about 3 seconds; repeat and cross-process requests took
+milliseconds because the Windows broker caches tokens.
+
+- [x] ENTRA-BROKER-01 Update requirements and design: in-process MSAL broker,
+      per-mode scopes (`https://graph.microsoft.com/.default` for the built-in
+      ID, `User.Read` for a configured `client_id`), silent-only call, token
+      handling rules, broker-status diagnostics, and a hard timeout.
+- [x] ENTRA-BROKER-02 Add `msal[broker]` as a Windows-only dependency, import it
+      lazily only when the Entra detector runs, and keep `msal` logs at
+      WARNING outside `--verbose`.
+- [x] ENTRA-BROKER-03 Replace the PowerShell helper with an MSAL broker token
+      request plus an `httpx` Graph `/me` call, with a hard overall timeout that
+      abandons a hung broker call without blocking the detection pass.
+- [x] ENTRA-BROKER-04 Rewrite Entra detector tests with a fake MSAL app and
+      mocked Graph: per-mode scopes and authority, `prompt="none"` with a
+      UI hook that fails, no alternate-scope retry, broker-status and
+      redirect-URI error mapping, Graph HTTP errors, timeout, missing broker
+      library, non-Windows, SMTP-only proxy parsing, and no token in logs,
+      diagnostics, or results.
+- [x] ENTRA-BROKER-05 Verify live on a cloud-joined device that the detector
+      resolves both configured domains with no PowerShell process started.
+      Verified 2026-09-29: 0.38 seconds, both domains, no new `powershell.exe`;
+      an isolated install of the built 1.5.1 wheel resolved both identities
+      with only the Entra detector enabled.
+- [x] ENTRA-BROKER-06 Update `docs/config-schema.md`, `docs/troubleshooting.md`,
+      README privacy notes, and the CHANGELOG; bump to 1.5.1.
+- [x] ENTRA-BROKER-07 Reproduce timed-out lookups overlapping automatic
+      retries, including config changes and stalled authority, broker, and
+      Graph calls; verify recovery after the original worker exits.
+- [x] ENTRA-BROKER-08 Keep one Entra lookup active per process until its worker
+      exits, skip subsequent work after its deadline, and bound HTTP waits.
+- [ ] ENTRA-BROKER-09 Document timeout and retry behavior, run the release
+      checks, and publish and verify 1.5.1 on GitHub and PyPI.
+
+Pre-release verification (2026-09-29): all 442 tests pass, including six
+regressions first observed failing before the timeout fix. The 1.5.1 wheel and
+sdist build successfully, pass metadata and content checks and a publish dry
+run, and the isolated wheel's CLI help works. Open code, secret, and dependency
+alert counts are zero. Stale AnyIO alerts #3 and #4 were marked inaccurate
+with evidence: GitHub's dependency inventory reported 4.13.0 while the current
+remote and release lockfiles already resolve 4.15.1 (patched minimum 4.14.2).
 
 ## Future Roadmap
 

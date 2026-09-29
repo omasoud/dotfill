@@ -30,3 +30,4 @@ def configure_logging(*, verbose: bool = False) -> None:
         logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
         logging.getLogger("httpx").setLevel(logging.WARNING)
         logging.getLogger("httpcore").setLevel(logging.WARNING)
+        logging.getLogger("msal").setLevel(logging.WARNING)

@@ -388,27 +388,37 @@ and diagnostic parsing without requiring a live directory.
 
 ### Entra Detector
 
-`identity_entra.py` runs a Windows PowerShell 5.1 helper (WinRT is not
-projected in PowerShell 7) with `-NoProfile -NonInteractive` and a hard
-timeout. The helper:
+`identity_entra.py` uses MSAL Python's Windows broker support (`msal[broker]`,
+which brings Microsoft's `pymsalruntime`) in process. It starts no
+PowerShell or other child process. `msal` is a Windows-only dependency and is
+imported only when the detector runs. The detector:
 
-1. finds the `https://login.microsoft.com` Web Account Manager provider for the
-   configured authority (default `organizations`);
-2. requests a token with `WebAuthenticationCoreManager.GetTokenSilentlyAsync`
-   using exactly one request form per client mode, with no automatic format
-   fallback:
-   - built-in client ID: empty scope plus request property
-     `resource = https://graph.microsoft.com`;
-   - configured `client_id`: scope `User.Read` plus request property
-     `resource = https://graph.microsoft.com`, following Microsoft's WAM
-     example.
+1. builds a `PublicClientApplication` for the configured or built-in client ID
+   with `enable_broker_on_windows=True` and authority
+   `https://login.microsoftonline.com/<tenant>` (default `organizations`);
+2. calls `acquire_token_interactive(scopes, prompt="none",
+   parent_window_handle=CONSOLE_WINDOW_HANDLE, on_before_launching_ui=...)`.
+   With `prompt="none"` and no login hint, MSAL only performs the broker's
+   silent sign-in for the default Windows account and never falls back to
+   interactive UI; the UI hook raises as a second guard. Exactly one scope set
+   is used per client mode, with no automatic fallback:
+   - built-in client ID: `https://graph.microsoft.com/.default`;
+   - configured `client_id`: `User.Read`;
+3. calls `GET https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName,proxyAddresses`
+   with `httpx` (TLS verified);
+4. drops the token and builds facts from `mail`, `userPrincipalName`, and
+   SMTP proxy addresses; other proxy types such as `X500:` are ignored.
 
-   It never calls `RequestTokenAsync`, so it cannot show UI;
-3. calls `GET https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName,proxyAddresses`;
-4. discards the token and prints only `MAIL:`, `UPN:`, `PROXY:`, and `ERR:`
-   lines using the same protocol as the Windows AD probe. `PROXY:` lines carry
-   only `smtp:`/`SMTP:` proxy addresses; other types such as `X500:` are
-   dropped.
+Steps 1-3 run on a daemon worker thread with one fixed 20-second deadline.
+If a call hangs, the detector returns `failed` without blocking the detection
+pass. A process-wide lookup slot remains held until the worker exits; retries,
+including those for changed configuration, return `entra: previous lookup
+still running` without starting another worker. Normal backoff retries resume
+after the worker exits. An expired worker does not advance from authority
+discovery to token acquisition or from token acquisition to Graph, and late
+results are discarded. MSAL HTTP requests have a finite timeout; Graph's
+timeout is at most 10 seconds and never exceeds the remaining lookup budget.
+An already-running native broker call cannot be forcibly stopped by Python.
 
 The built-in client ID is Microsoft's Azure CLI public client
 (`04b07795-8ddb-461a-bbee-02f9e1bf7b46`), which Microsoft pre-authorizes for
@@ -422,32 +432,52 @@ Microsoft Graph. Field evidence from one cloud-joined device and tenant
 | Azure CLI | `https://graph.microsoft.com/User.Read`, with or without `wam_compat=2.0` | `AADSTS65002` | — |
 | Graph PowerShell | any of the forms above | success, `/me` 200 | same 12 broad scopes regardless of requested scope |
 
+Broker evidence (2026-09-29, same device, MSAL 1.39.0 with `pymsalruntime`
+0.20.6, `prompt="none"`): the built-in ID with
+`https://graph.microsoft.com/.default` succeeded with no UI; the built-in ID
+with `User.Read` failed with broker status `Status_IncorrectConfiguration`
+(error code `0xCAA20002`, the broker form of `AADSTS65002`); a consented
+public client with `User.Read` succeeded. The first request took about 3
+seconds and later requests, including from new processes, took milliseconds
+because the Windows broker caches tokens.
+
 So requesting `User.Read` does not narrow tokens for Microsoft first-party
 clients. For the built-in ID, `AADSTS65002` is an authorization answer, not a
-request-format error. The built-in mode therefore uses only the resource form.
+request-format error. The built-in mode therefore uses only Graph `.default`.
 Only a dedicated app registration consented for `User.Read` alone can yield a
-least-privilege token; that remains unverified until such a registration is
-available.
+least-privilege token.
 
 That evidence is not a guarantee. A tenant's Conditional Access, token
 protection, or client restrictions can require interaction or block the
 client, so the detector is best-effort. Silent failures produce `failed` with
-distinct short diagnostics, such as `entra: sign-in interaction required` or
-`entra: client not authorized for Microsoft Graph` (`AADSTS65002`). Identities
-then fall back to lower-priority detectors and finally to explicit `.env`
-values. Tenants that block the built-in ID can configure an approved app
-registration (public client, delegated `User.Read`, Web Account Manager
-redirect URI) through `client_id`.
+distinct short diagnostics derived from the broker status, never from the
+raw error text:
 
-Because built-in-mode tokens carry broad delegated scopes, the token must not
-leave the helper process. The helper must use it only for the single `/me`
-request.
+| Broker result | Diagnostic |
+|---|---|
+| `Status_InteractionRequired`, `Status_AccountUnusable`, `Status_AccountNotFound` | `entra: sign-in interaction required` |
+| `Status_IncorrectConfiguration` or `AADSTS65002` | `entra: client not authorized for Microsoft Graph` |
+| `RedirectUriError` (configured app lacks the broker redirect URI) | `entra: client_id is missing the broker redirect URI` |
+| `Status_NoNetwork`, `Status_NetworkTemporarilyUnavailable`, `Status_ServerTemporarilyUnavailable`, `Status_TransientError` | `entra: sign-in service unreachable` |
+| `Status_DeviceNotRegistered`, `Status_RequiredBrokerMissing` | `entra: no work or school account available` |
+| other broker errors | `entra: token request failed (<Status name>)` |
+| MSAL or `pymsalruntime` not importable | `entra: Windows sign-in broker unavailable` |
+
+Identities then fall back to lower-priority detectors and finally to explicit
+`.env` values. Tenants that block the built-in ID can configure an approved
+app registration (public client, delegated `User.Read`, broker redirect URI
+`ms-appx-web://Microsoft.AAD.BrokerPlugin/<client-id>`) through `client_id`.
+
+Because built-in-mode tokens carry broad delegated scopes, the token is used
+only for the single `/me` request. It stays in local variables of the worker,
+is never logged, stored, cached by dotfill, or placed in results or
+diagnostics, and is dropped immediately after the request. `msal` logs stay at
+WARNING unless `--verbose` is set; MSAL does not log tokens.
 
 Configured `client_id` must be a GUID. `tenant` must be `organizations`, a GUID,
-or a DNS-safe domain. Values are validated before interpolation into the helper
-script. Silent-token failures such as `UserInteractionRequired`, provider
-errors, Graph HTTP errors, and non-Windows platforms become short non-secret
-diagnostics and never raise from state construction.
+or a DNS-safe domain. Silent-token failures, Graph HTTP errors, timeouts, and
+non-Windows platforms become short non-secret diagnostics and never raise from
+state construction.
 
 ### Identity Rules
 
@@ -822,8 +852,8 @@ Core verification is pytest-based:
 - config paths, loader, merge, and validation;
 - identity facts and rules;
 - identity detector ordering, lazy execution, session caching, AD in-process
-  UPN fallback, Entra helper parsing and failure handling with injected
-  results (no live directory or network);
+  UPN fallback, Entra broker request construction and failure handling with a
+  fake MSAL app and mocked Graph (no live directory or network);
 - resolver state construction, including non-blocking unresolved identities;
 - save/backup behavior;
 - import scan and commit;

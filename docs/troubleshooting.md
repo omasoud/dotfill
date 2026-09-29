@@ -119,7 +119,15 @@ Common causes on Windows:
   or `entra: client not authorized for Microsoft Graph` means tenant policy
   does not allow the silent lookup for that client. Configure an approved
   `client_id` (see [config-schema.md](config-schema.md#entra-detector)) or use
-  an explicit `.env` value.
+  an explicit `.env` value. `entra: client_id is missing the broker redirect
+  URI` means the configured app registration needs the redirect URI
+  `ms-appx-web://Microsoft.AAD.BrokerPlugin/<client-id>`.
+  `entra: Windows sign-in broker unavailable` means the MSAL broker components
+  could not load; reinstall dotfill on Windows.
+- `entra: previous lookup still running` means an earlier Entra request has
+  timed out but its underlying call has not finished. Other detectors and the
+  dashboard remain available. Retries resume after that worker exits; if it
+  remains stuck after connectivity returns, restart dotfill.
 
 Failed lookups are retried automatically with backoff, so a VPN reconnect is
 picked up without restarting dotfill.

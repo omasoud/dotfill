@@ -8,6 +8,24 @@ format.
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-09-29
+
+### Changed
+
+- The `entra` detector now obtains its Microsoft Graph token through MSAL's
+  Windows broker support in process instead of an encoded Windows PowerShell
+  helper, so it no longer starts `powershell.exe`. This removes a common
+  endpoint-security trigger. `msal[broker]` is now a Windows-only dependency.
+- Built-in client ID requests now use the `https://graph.microsoft.com/.default`
+  scope; entra diagnostics are derived from broker status and include a new
+  `client_id is missing the broker redirect URI` message.
+
+### Fixed
+
+- Timed-out Entra lookups no longer overlap subsequent retries, including
+  after configuration changes. Expired lookups skip further token and Graph
+  requests, and retries resume once the previous worker exits.
+
 ## [1.5.0] - 2026-09-29
 
 ### Added
