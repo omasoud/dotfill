@@ -148,7 +148,31 @@ def test_frontend_uses_local_svg_favicon() -> None:
 def test_frontend_entry_module_uses_current_cache_key() -> None:
     index_text = STATIC_DIR.joinpath("index.html").read_text(encoding="utf-8")
 
-    assert '<script type="module" src="/app.js?v=9"></script>' in index_text
+    assert '<script type="module" src="/app.js?v=10"></script>' in index_text
+
+
+def test_frontend_service_action_wiring_is_present() -> None:
+    text = _static_text()
+
+    assert "service_actions.js" in text
+    assert "tokenPageAction(svc)" in text
+    assert "testAction(s)" in text
+    assert "serviceMissingHint(s)" in text
+    assert "disabled: !test.available" in text
+    assert 'd.status === "unresolved"' in text
+    assert ".unresolved-hint" in text
+
+
+def test_frontend_detection_refresh_wiring_is_present() -> None:
+    text = _static_text()
+
+    assert "detection_refresh.js" in text
+    assert "createDetectionScheduler" in text
+    assert "detectionScheduler.update(state.identity_detection)" in text
+    assert '"visibilitychange"' in text
+    assert "if (onDashboard) render();" in text
+    assert "detection-pending" in text
+    assert "i.diagnostics" in text
 
 
 def test_public_service_icons_have_bundled_sprite_symbols() -> None:

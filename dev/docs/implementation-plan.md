@@ -84,6 +84,20 @@ This document records the current implementation state, verification expectation
 - [x] Dashboard version display keeps the dotfill package version visible and
       appends optional wrapper name/version metadata supplied by the stable
       entrypoint.
+- [x] Unresolved identities never fail state construction; derived variables
+      report `unresolved`, and service token-page/test URLs resolve
+      independently with per-URL missing identities.
+- [x] Identity detectors `windows_ad` and opt-in `entra` support per-detector
+      `priority`; `email_by_domain` picks the first match in priority order.
+- [x] Identity detection runs as chained, single-flight background passes with
+      outcome-based caching (`complete`/`partial`/`failed`) and backoff; the
+      dashboard shows pending detection, polls within a server deadline, and
+      rechecks when a retry is due or the page becomes visible.
+- [x] The Entra detector silently reads Graph `/me` through Web Account
+      Manager with a fixed request form per client mode, keeps only SMTP
+      proxy addresses, and confines the token to its helper process.
+- [x] The Windows AD detector reads SAM name and UPN in-process and reports
+      short timeout diagnostics without the generated script.
 
 ## Verification Matrix
 
@@ -120,6 +134,13 @@ Focused verification areas:
 - [x] Frontend theme preference and import-test state helper behavior.
 - [x] Public service icon registry validation and bundled sprite alignment.
 - [x] Build artifact inspection includes static assets such as `app.js`, `app.css`, and helper modules.
+- [x] Non-blocking unresolved state across resolver, API (state, test, test-all,
+      import test), CLI `status`, and dashboard service actions.
+- [x] Detector schema, priority ordering, lazy chaining, caching/backoff,
+      pending deadlines, and single-flight passes with fake detectors and an
+      injectable clock.
+- [x] Entra helper request construction, output parsing, failure mapping, and
+      token secret boundary; AD in-process names and timeout sanitizing.
 
 
 ## Implemented: Locked Wrapper Profiles
@@ -496,6 +517,252 @@ Goal: keep the local dashboard usable when host-level MIME configuration maps
       a previously cached response with the invalid media type.
 - [x] STATIC-MIME-05 Run focused server/static tests and the full test suite,
       then update troubleshooting and release-note documentation.
+
+## Planned: Identity Resolution Resilience
+
+Goal: keep dotfill usable when identity detection partially fails. Examples
+include devices off the corporate network, cloud-joined devices where
+directory Kerberos fails (for example Windows Hello sign-in against domain
+controllers without the KDC Authentication EKU), and sessions that change
+sign-in method while the server is running. Add a silent Entra/Microsoft Graph
+detector that works without directory reachability.
+
+Field findings that motivate this work (cloud-joined Windows device, hybrid
+account):
+
+- Password sign-in on the corporate network: Windows AD lookup succeeds.
+- Off VPN: the AD probe hits its 15-second timeout; every state refresh repeats
+  the wait and then fails with `409` because a derived variable needs the
+  unresolved identity.
+- Windows Hello PIN sign-in: Kerberos/LDAP binds hang (System log Kerberos
+  event 19, KDC certificate missing EKU `1.3.6.1.5.2.3.5`); same `409`.
+- `GetUserNameExW(NameUserPrincipal)` returns the UPN instantly in all cases.
+- Silent Web Account Manager token + Graph `/me` returns `mail` and
+  `proxyAddresses` for every configured domain in about 0.6 seconds, with PIN
+  sign-in and without Kerberos.
+
+### Phase 1 — Non-blocking unresolved state
+
+ID-RESILIENCE-24 refines ID-RESILIENCE-04/-07: token and test URLs resolve
+independently rather than being cleared together.
+
+- [x] ID-RESILIENCE-01 Update requirements/design so unresolved identities never
+      fail state construction; add `unresolved` derived status, per-service
+      unresolved URLs, and test-endpoint behavior.
+- [x] ID-RESILIENCE-02 Replace
+      `test_unresolved_identity_required_by_derived_blocks_state` with a
+      failing reproducer expecting an `unresolved` derived state (with the
+      current `.env` value reported) and successful state construction.
+- [x] ID-RESILIENCE-03 Change `build_derived_states` to emit `unresolved` with
+      `computed_default = None` instead of raising.
+- [x] ID-RESILIENCE-04 Add a failing reproducer for a service URL template that
+      needs an unresolved identity; resolve service URLs per service, set
+      `resolved_token_url`/`resolved_test_url` to `None`, and populate
+      `ServiceState.unresolved_identities`.
+- [x] ID-RESILIENCE-05 Make `POST /api/test/{service_id}` return a non-secret
+      `409`, `POST /api/test-all` record a per-service failure and continue,
+      and `POST /api/import/test` fail only that row when a test URL needs an
+      unresolved identity; add API tests for each path.
+- [x] ID-RESILIENCE-06 Add API tests proving `/api/state` returns `200` with
+      unresolved identity/derived/service items, token saves still work and
+      skip unresolved derived fills, and the derived-default endpoint keeps
+      returning `409` for unresolved rows.
+- [x] ID-RESILIENCE-07 Render unresolved items inline in the dashboard: derived
+      rows with an `Unresolved` badge and no write action; service cards
+      without token link/test actions and naming the missing identity. Add
+      frontend/static tests.
+- [x] ID-RESILIENCE-08 Show unresolved derived rows and services with missing
+      identities in CLI `status` without failing the command; add CLI tests.
+- [x] ID-RESILIENCE-24 Resolve `token_url` and `test_url` independently with
+      `token_url_unresolved_identities`/`test_url_unresolved_identities`; keep
+      the test action when only the token URL is unresolved and the token link
+      when only the test URL is unresolved. Add resolver, API, and frontend
+      tests for each one-sided case.
+
+### Phase 2 — Detector framework, caching, and AD hardening
+
+ID-RESILIENCE-25 through -27 refine ID-RESILIENCE-12: caching is outcome-based
+(`complete`/`partial`/`failed`) with backoff, and detection runs in the
+background within a state wait budget. ID-RESILIENCE-32 and -33 refine -26 and
+-27: detection is one chained background pass, and the server reports how
+long the dashboard should poll and when to recheck. ID-RESILIENCE-33 code and
+automated tests are done; its manual open-dashboard VPN-reconnect check is
+pending with ID-RESILIENCE-30.
+
+- [x] ID-RESILIENCE-09 Extend `[identity.detectors.<name>]` schema with
+      `priority` and the `entra` detector (`enabled`, `priority`, optional
+      `client_id`, `tenant`); validate types, GUID/DNS-safe values, and
+      unknown keys; add loader tests.
+- [x] ID-RESILIENCE-10 Add the detector-neutral `email_by_domain` source and
+      `entra.email_by_domain`; reject pinned sources whose detector is
+      disabled and `email_by_domain` when no detector is enabled; add loader
+      and rule tests.
+- [x] ID-RESILIENCE-11 Add `identity_detectors.py` with priority ordering,
+      lazy execution (skip lower-priority detectors once all needed domains
+      are matched; honor explicit `.env` overrides), and per-identity
+      detector attribution and diagnostics; add tests with injected fake
+      detectors.
+- [x] ID-RESILIENCE-12 Cache detector results in `SessionState`, keyed by
+      detector name and config fingerprint: successes for the process
+      lifetime, failures/empty results for a 60-second retry interval. Add
+      tests with an injectable clock proving refreshes do not re-run
+      successful detectors, failures retry after the interval, and config
+      changes invalidate the cache.
+- [x] ID-RESILIENCE-13 Add a reproducer showing a probe timeout diagnostic
+      currently embeds the generated script; replace it with a short
+      non-secret diagnostic and keep stdout emitted before the timeout
+      parseable.
+- [x] ID-RESILIENCE-14 Read SAM-compatible name and UPN in-process via
+      `GetUserNameExW` so they survive LDAP failure or timeout; skip the call
+      off Windows; add tests with the Windows API call stubbed.
+- [x] ID-RESILIENCE-15 Surface per-identity detector diagnostics through the
+      API identity payload, dashboard (tooltip or detail text), and CLI
+      `status`; keep them short and non-secret; add tests.
+- [x] ID-RESILIENCE-25 Classify detector runs as `complete`, `partial`, or
+      `failed`. Cache only `complete` for the process lifetime; retry `partial`
+      and `failed` with backoff (60 seconds doubling to a 15-minute cap, reset
+      on complete). Treat an AD run with in-process facts but an LDAP
+      failure/timeout as `partial`. Add clock-injected tests, including a
+      partial-to-complete transition that resolves a previously missing
+      domain.
+- [x] ID-RESILIENCE-26 Add a single-flight background `DetectorRunner`: state
+      builds wait at most a budget (default 2 seconds), mark still-running
+      identities `unresolved` with a `detection pending` diagnostic, and set
+      `identity_detection_pending`; backoff retries run in the background; CLI
+      `status` waits for completion. Add tests with a blocking fake detector
+      proving refreshes return within the budget and concurrent builds share
+      one run.
+- [x] ID-RESILIENCE-27 Show a dashboard pending indicator and re-fetch state on
+      a bounded poll while detection is pending; stop polling when it clears
+      or the poll limit is reached. Add frontend/static tests.
+- [x] ID-RESILIENCE-32 Run detection as a single chained background pass: after
+      each detector finishes, immediately start the next needed detector
+      without waiting for another state build; keep
+      `identity_detection.pending` true until the pass ends; report
+      `pending_deadline_seconds` as the sum of the remaining queued/running
+      detector timeouts plus a margin. Add tests with fake detectors: a slow
+      Entra failure followed by a slow AD success resolves the identities with
+      no further state request, `pending` stays true across both runs, and the
+      deadline covers both.
+- [ ] ID-RESILIENCE-33 Report `next_retry_seconds` in state; in the dashboard,
+      bound polling by the server-reported `pending_deadline_seconds`,
+      schedule one state fetch when a retry becomes due, and re-fetch when the
+      page becomes visible again. Add frontend tests with fake timers for the
+      poll bound, the retry-due fetch, visibility re-fetch, and no duplicate
+      timers. Manually verify that an open dashboard recovers after a VPN
+      reconnect without a manual refresh.
+- [x] ID-RESILIENCE-39 Review fix: when the detector config changes during a
+      pass, report the new request's detectors as pending (deadline includes
+      the running pass), start a pass for the latest request as soon as the
+      old pass ends, and make `wait=None` wait for the caller's own
+      detectors. Tests cover an Entra-only to AD-only change mid-pass and an
+      unbounded wait behind another pass.
+- [x] ID-RESILIENCE-40 Review fix: cache test-all failures for unresolved
+      test URLs with a fingerprint of service, token digest, and missing
+      identities so a state refresh keeps showing `failed` until the
+      identities resolve. Tests cover the post-refresh view and clearing
+      once the identity resolves.
+- [x] ID-RESILIENCE-41 Add a regression for a config change behind a stalled
+      detector pass; make the queued request's polling deadline expire even
+      when repeated state requests arrive after the original deadline.
+- [x] ID-RESILIENCE-42 Add regressions for more than 1,024 consecutive failed
+      or partial results; keep backoff capped without overflow and preserve
+      the initial delay after detector configuration changes.
+- [x] ID-RESILIENCE-43 Document the deadline and backoff fixes, run the
+      detector regressions and full test suite, and reconcile the session.
+
+### Phase 3 — Entra (Microsoft Graph) detector
+
+ID-RESILIENCE-35 supersedes ID-RESILIENCE-28. The ID-RESILIENCE-34 probe showed
+that, for the built-in client ID, every `User.Read` request fails with
+`AADSTS65002`, and that Microsoft first-party clients return the same broad
+scopes whatever is requested. Each client mode therefore uses one fixed request
+form, with no format fallback. ID-RESILIENCE-29 and -30 extend ID-RESILIENCE-19
+with failure handling and second-user verification; the built-in client ID is
+best-effort, not a guarantee. ID-RESILIENCE-28 stays open only as superseded.
+Manual progress on ID-RESILIENCE-19 (2026-09-28, one cloud-joined device with
+Kerberos to the directory failing): Entra resolved both configured domains in
+about 1 second with AD skipped, a tenant-domain authority also worked, and
+with Entra disabled AD returned a partial result (in-process UPN) and
+unresolved identities with diagnostics instead of an error. Off-VPN and
+password-sign-in runs are still pending.
+
+- [x] ID-RESILIENCE-16 Implement `identity_entra.py`: a Windows PowerShell 5.1
+      helper using `WebAuthenticationCoreManager.GetTokenSilentlyAsync` with
+      resource `https://graph.microsoft.com`, the configured or built-in
+      client ID (Azure CLI public client), and a hard timeout; call Graph
+      `/me?$select=mail,userPrincipalName,proxyAddresses` and emit only
+      `MAIL`/`UPN`/`PROXY`/`ERR` lines.
+- [x] ID-RESILIENCE-17 Add tests for helper generation (validated
+      `client_id`/`tenant` interpolation, no interactive token API, no token
+      output), output parsing into shared facts, silent-token/Graph/timeout
+      failures as diagnostics, and non-Windows unavailability.
+- [x] ID-RESILIENCE-18 Add a static/secret-boundary test proving the helper
+      never writes, logs, or returns the access token and that no dotfill log
+      line contains token-like material from the Entra path.
+- [ ] ID-RESILIENCE-19 Verify manually on a cloud-joined device: password
+      sign-in, Windows Hello PIN sign-in, and off-VPN. Confirm Entra resolves
+      both email domains without delay, AD is skipped when Entra satisfies
+      all domains, and disabling Entra falls back to AD.
+- [ ] ID-RESILIENCE-28 Request the delegated `https://graph.microsoft.com/User.Read`
+      scope through Web Account Manager, falling back to the v1 Graph resource
+      form only if the broker rejects scoped requests. Record which form works
+      and add tests for the request construction.
+- [x] ID-RESILIENCE-29 Map silent-token failures (interaction required,
+      client blocked by policy, provider unavailable) to distinct short
+      diagnostics and a `failed` outcome, and verify fallback to
+      lower-priority detectors and explicit `.env` values; add tests.
+- [ ] ID-RESILIENCE-30 Manual verification with Graph unavailable (Entra
+      disabled or silent acquisition failing) and VPN disconnected: the
+      dashboard stays responsive within the wait budget and shows pending,
+      then unresolved with diagnostics; no refresh stalls on AD retries; a VPN
+      reconnect resolves the identities after the next retry. Also verify the
+      built-in client ID on a second user or device.
+- [x] ID-RESILIENCE-34 Probe silent Web Account Manager request forms for the
+      Azure CLI (built-in) and Graph PowerShell client IDs on a cloud-joined
+      device, without logging tokens; record the success/failure and effective
+      `scp` results in the design's Entra Detector evidence table.
+- [x] ID-RESILIENCE-35 Use one fixed request form per client mode: built-in ID
+      with an empty scope plus the Graph `resource` property; configured
+      `client_id` with `User.Read` plus the Graph `resource` property. Never
+      retry with a different form. Map `AADSTS65002` to
+      `entra: client not authorized for Microsoft Graph`. Add request
+      construction tests for both modes and a test proving no alternate-form
+      retry occurs.
+- [x] ID-RESILIENCE-36 Keep only `smtp:`/`SMTP:` proxy addresses in Entra
+      helper output and drop other types such as `X500:`; add a parsing test
+      with mixed proxy address types.
+- [ ] ID-RESILIENCE-37 When an approved app registration consented for
+      `User.Read` is available, verify through `client_id` that silent
+      acquisition succeeds and that the effective `scp` is limited to that
+      grant; record the result in the design evidence table.
+
+### Phase 4 — Documentation and release
+
+- [x] ID-RESILIENCE-20 Update `docs/config-schema.md` with detector
+      `priority`, the `entra` detector options, `email_by_domain` and
+      `entra.email_by_domain`, and the unresolved-state behavior.
+- [x] ID-RESILIENCE-31 Document in `docs/config-schema.md` and
+      `docs/troubleshooting.md` that the built-in Entra client ID is
+      best-effort. Describe configuring an approved app registration through
+      `client_id` (public client, delegated `User.Read`, Web Account Manager
+      redirect URI) and explicit `.env` values as fallbacks.
+- [x] ID-RESILIENCE-38 Document in `docs/config-schema.md` that the built-in
+      client ID yields tokens with broad pre-authorized delegated scopes that
+      dotfill confines to the helper for a single `/me` call, and that only an
+      approved registration consented for `User.Read` provides least
+      privilege.
+- [x] ID-RESILIENCE-21 Update `docs/troubleshooting.md` for unresolved
+      identities: off-network directory lookups, Windows Hello sign-in with
+      domain controller certificates lacking the KDC Authentication EKU
+      (Kerberos event 19), silent Entra token failures, and explicit `.env`
+      overrides as the manual fallback.
+- [x] ID-RESILIENCE-22 Update README and getting-started examples where
+      detector configuration appears, using neutral domains.
+- [ ] ID-RESILIENCE-23 Run the full verification matrix, update the
+      current-status and verification checklists, add a CHANGELOG entry, and
+      release a minor version so wrapper packages can raise their dotfill
+      floor.
 
 ## Future Roadmap
 

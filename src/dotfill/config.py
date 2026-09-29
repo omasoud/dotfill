@@ -34,6 +34,18 @@ def resolve_url_template(
     return result
 
 
+def unresolved_template_identities(
+    template: str,
+    identity_values: Mapping[str, str | None],
+) -> list[str]:
+    """Return placeholder names in *template* whose identity value is empty."""
+    missing: list[str] = []
+    for placeholder in _PLACEHOLDER_RE.findall(template):
+        if not identity_values.get(placeholder) and placeholder not in missing:
+            missing.append(placeholder)
+    return missing
+
+
 def collect_managed_variable_names(config: EffectiveConfig) -> set[str]:
     """Return variable names dotfill manages or reads as identity overrides."""
     names: set[str] = set(config.identities)

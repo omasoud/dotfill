@@ -758,3 +758,183 @@ domain = "example.com"
 
     with pytest.raises(ConfigSchemaError, match="windows_ad detector is disabled"):
         load_effective_config(_context(tmp_path))
+
+
+def test_detector_defaults_and_priority_order(tmp_path: Path) -> None:
+    _write(tmp_path / "config.toml", "version = 1\n")
+
+    cfg = load_effective_config(_context(tmp_path))
+
+    detectors = cfg.identity_detectors
+    assert detectors.windows_ad.enabled is True
+    assert detectors.windows_ad.priority == 20
+    assert detectors.entra.enabled is False
+    assert detectors.entra.priority == 10
+    assert detectors.entra.client_id is None
+    assert detectors.entra.tenant == "organizations"
+    assert detectors.enabled_in_priority_order() == ["windows_ad"]
+
+
+def test_entra_detector_options_and_order(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "config.toml",
+        """
+version = 1
+
+[identity.detectors.entra]
+enabled = true
+client_id = "00000000-0000-0000-0000-00000000abcd"
+tenant = "contoso.example.com"
+""".strip(),
+    )
+
+    cfg = load_effective_config(_context(tmp_path))
+
+    entra = cfg.identity_detectors.entra
+    assert entra.enabled is True
+    assert entra.client_id == "00000000-0000-0000-0000-00000000abcd"
+    assert entra.tenant == "contoso.example.com"
+    assert cfg.identity_detectors.enabled_in_priority_order() == ["entra", "windows_ad"]
+
+
+def test_detector_priority_overrides_and_ties_order_by_name(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "config.toml",
+        """
+version = 1
+
+[identity.detectors.entra]
+enabled = true
+priority = 30
+
+[identity.detectors.windows_ad]
+priority = 5
+""".strip(),
+    )
+    cfg = load_effective_config(_context(tmp_path))
+    assert cfg.identity_detectors.enabled_in_priority_order() == ["windows_ad", "entra"]
+
+    _write(
+        tmp_path / "config.toml",
+        """
+version = 1
+
+[identity.detectors.entra]
+enabled = true
+priority = 7
+
+[identity.detectors.windows_ad]
+priority = 7
+""".strip(),
+    )
+    cfg = load_effective_config(_context(tmp_path))
+    assert cfg.identity_detectors.enabled_in_priority_order() == ["entra", "windows_ad"]
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        ('[identity.detectors.windows_ad]\npriority = "high"', "priority"),
+        ("[identity.detectors.windows_ad]\npriority = true", "priority"),
+        ('[identity.detectors.entra]\nclient_id = "not-a-guid"', "client_id"),
+        ("[identity.detectors.entra]\ntenant = \"bad tenant'; x\"", "tenant"),
+        ('[identity.detectors.entra]\ntenant = ""', "tenant"),
+        ("[identity.detectors.entra]\nmode = \"strict\"", "unknown field"),
+    ],
+)
+def test_invalid_detector_options_raise(body: str, message: str, tmp_path: Path) -> None:
+    _write(tmp_path / "config.toml", f"version = 1\n{body}\n")
+
+    with pytest.raises(ConfigSchemaError, match=message):
+        load_effective_config(_context(tmp_path))
+
+
+def test_entra_tenant_accepts_guid(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "config.toml",
+        """
+version = 1
+
+[identity.detectors.entra]
+tenant = "11111111-2222-3333-4444-555555555555"
+""".strip(),
+    )
+
+    cfg = load_effective_config(_context(tmp_path))
+
+    assert cfg.identity_detectors.entra.tenant == "11111111-2222-3333-4444-555555555555"
+
+
+def test_neutral_and_entra_email_sources_load(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "config.toml",
+        """
+version = 1
+
+[identity.detectors.entra]
+enabled = true
+
+[identities.WORK_EMAIL]
+source = "email_by_domain"
+domain = "example.com"
+
+[identities.CLOUD_EMAIL]
+source = "entra.email_by_domain"
+domain = "cloud.example.com"
+""".strip(),
+    )
+
+    cfg = load_effective_config(_context(tmp_path))
+
+    assert cfg.identities["WORK_EMAIL"].source == "email_by_domain"
+    assert cfg.identities["CLOUD_EMAIL"].params == {"domain": "cloud.example.com"}
+
+
+def test_entra_source_requires_enabled_entra_detector(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "config.toml",
+        """
+version = 1
+
+[identities.WORK_EMAIL]
+source = "entra.email_by_domain"
+domain = "example.com"
+""".strip(),
+    )
+
+    with pytest.raises(ConfigSchemaError, match="entra detector is disabled"):
+        load_effective_config(_context(tmp_path))
+
+
+def test_neutral_email_source_requires_an_enabled_detector(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "config.toml",
+        """
+version = 1
+
+[identity.detectors.windows_ad]
+enabled = false
+
+[identities.WORK_EMAIL]
+source = "email_by_domain"
+domain = "example.com"
+""".strip(),
+    )
+
+    with pytest.raises(ConfigSchemaError, match="requires an enabled identity detector"):
+        load_effective_config(_context(tmp_path))
+
+
+def test_neutral_email_source_requires_domain(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "config.toml",
+        """
+version = 1
+
+[identities.WORK_EMAIL]
+source = "email_by_domain"
+""".strip(),
+    )
+
+    with pytest.raises(ConfigSchemaError, match="domain"):
+        load_effective_config(_context(tmp_path))

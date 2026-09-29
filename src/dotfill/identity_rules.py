@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from .config_models import IdentityDefinition
 from .errors import ConfigSchemaError
-from .identity_facts import ADFacts
+from .identity_facts import DetectorResult, IdentityFacts
 
 
 @dataclass(frozen=True)
@@ -18,18 +18,31 @@ class IdentityRuleResult:
     name: str
     value: str | None
     diagnostics: list[str] = field(default_factory=list)
+    detector: str | None = None
 
 
 def evaluate_identity_rules(
     identities: Mapping[str, IdentityDefinition],
     *,
-    ad_facts: ADFacts | None = None,
+    detector_results: Mapping[str, DetectorResult] | None = None,
+    detector_order: Sequence[str] = (),
+    pending_detectors: Collection[str] = (),
     environ: Mapping[str, str] | None = None,
     explicit_values: Mapping[str, str | None] | None = None,
 ) -> dict[str, IdentityRuleResult]:
-    """Evaluate enabled identity definitions into detected identity values."""
+    """Evaluate enabled identity definitions into detected identity values.
+
+    `detector_order` lists enabled detectors in priority order for the
+    detector-neutral `email_by_domain` source; `pending_detectors` names
+    detectors whose run has not finished yet.
+    """
     env = os.environ if environ is None else environ
     explicit = {} if explicit_values is None else explicit_values
+    detectors = _DetectorView(
+        results=detector_results or {},
+        order=list(detector_order),
+        pending=set(pending_detectors),
+    )
     ordered = _topological_identity_order(identities)
     values: dict[str, IdentityRuleResult] = {}
     for name in ordered:
@@ -37,11 +50,31 @@ def evaluate_identity_rules(
         values[name] = _evaluate_one(
             definition,
             values,
-            ad_facts=ad_facts,
+            detectors=detectors,
             environ=env,
             explicit_values=explicit,
         )
     return values
+
+
+@dataclass(frozen=True)
+class _DetectorView:
+    results: Mapping[str, DetectorResult]
+    order: list[str]
+    pending: set[str]
+
+    def facts(self, detector: str) -> IdentityFacts | None:
+        result = self.results.get(detector)
+        return result.facts if result is not None else None
+
+    def diagnostics(self, detector: str) -> list[str]:
+        out: list[str] = []
+        facts = self.facts(detector)
+        if facts is not None:
+            out.extend(facts.diagnostics)
+        if detector in self.pending:
+            out.append(f"{detector}: detection pending")
+        return out
 
 
 def _topological_identity_order(
@@ -86,12 +119,13 @@ def _evaluate_one(
     definition: IdentityDefinition,
     values: Mapping[str, IdentityRuleResult],
     *,
-    ad_facts: ADFacts | None,
+    detectors: _DetectorView,
     environ: Mapping[str, str],
     explicit_values: Mapping[str, str | None],
 ) -> IdentityRuleResult:
     source = definition.source
     diagnostics: list[str] = []
+    detector: str | None = None
     if source == "literal":
         value = str(definition.params.get("value", ""))
     elif source == "env":
@@ -108,15 +142,28 @@ def _evaluate_one(
             if source_value and "@" in source_value
             else None
         )
-    elif source == "windows_ad.email_by_domain":
-        value = _email_by_domain(ad_facts, str(definition.params.get("domain", "")))
-        diagnostics.extend(ad_facts.diagnostics if ad_facts is not None else [])
-    elif source == "windows_ad.sam":
-        value = ad_facts.sam if ad_facts is not None else None
-        diagnostics.extend(ad_facts.diagnostics if ad_facts is not None else [])
-    elif source == "windows_ad.domain":
-        value = ad_facts.domain if ad_facts is not None else None
-        diagnostics.extend(ad_facts.diagnostics if ad_facts is not None else [])
+    elif source == "email_by_domain":
+        domain = str(definition.params.get("domain", ""))
+        value = None
+        for name in detectors.order:
+            value = _email_by_domain(detectors.facts(name), domain)
+            if value:
+                detector = name
+                break
+            diagnostics.extend(detectors.diagnostics(name))
+    elif source in {"windows_ad.email_by_domain", "entra.email_by_domain"}:
+        name = source.split(".", 1)[0]
+        value = _email_by_domain(
+            detectors.facts(name), str(definition.params.get("domain", ""))
+        )
+        diagnostics.extend(detectors.diagnostics(name))
+        detector = name if value else None
+    elif source in {"windows_ad.sam", "windows_ad.domain"}:
+        facts = detectors.facts("windows_ad")
+        field_name = "sam" if source == "windows_ad.sam" else "domain"
+        value = getattr(facts, field_name) if facts is not None else None
+        diagnostics.extend(detectors.diagnostics("windows_ad"))
+        detector = "windows_ad" if value else None
     else:
         raise ConfigSchemaError(
             f"identities.{definition.name}.source: unsupported identity source {source!r}"
@@ -124,7 +171,8 @@ def _evaluate_one(
     return IdentityRuleResult(
         name=definition.name,
         value=value or None,
-        diagnostics=diagnostics,
+        diagnostics=[] if value else diagnostics,
+        detector=detector,
     )
 
 
@@ -140,9 +188,9 @@ def _effective_upstream_value(
     return None
 
 
-def _email_by_domain(ad_facts: ADFacts | None, domain: str) -> str | None:
-    if ad_facts is None:
+def _email_by_domain(facts: IdentityFacts | None, domain: str) -> str | None:
+    if facts is None:
         return None
     normalized_domain = domain.lower().removeprefix("@")
     suffix = "@" + normalized_domain
-    return next((email for email in ad_facts.emails if email.endswith(suffix)), None)
+    return next((email for email in facts.emails if email.endswith(suffix)), None)

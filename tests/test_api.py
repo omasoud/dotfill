@@ -1125,3 +1125,210 @@ def test_import_commit_skips_latest_no_change_rows(
         == "SERVICE_A_TOKEN=scanned\nWORK_USERNAME=alice@example.com\n"
     )
     assert ctx.session.backup_created is False
+
+
+# ---- Unresolved identities never block state ------------------------------
+
+
+@pytest.fixture()
+def unresolved_client(tmp_path: Path) -> tuple[TestClient, AppContext, Path]:
+    env = tmp_path / "unresolved.env"
+    env.write_text("", encoding="utf-8")
+    root = tmp_path / "unresolved-config"
+    root.mkdir()
+    (root / "config.toml").write_text(
+        f"""
+version = 1
+
+[target]
+default_env_path = "{env.as_posix()}"
+
+[identities.WORK_EMAIL]
+source = "env"
+name = "DOTFILL_TEST_MISSING_WORK_EMAIL"
+
+[derived.WORK_USERNAME]
+from_identity = "WORK_EMAIL"
+
+[services.NEEDS_ID]
+display_name = "Needs identity"
+token_var = "NEEDS_ID_TOKEN"
+token_url = "https://needs.example.com/{{WORK_EMAIL}}/tokens"
+test_url = "https://needs.example.com/users/{{WORK_EMAIL}}"
+
+[services.PLAIN]
+display_name = "Plain"
+token_var = "PLAIN_TOKEN"
+token_url = "https://plain.example.com/tokens"
+test_url = "https://plain.example.com/me"
+""".strip(),
+        encoding="utf-8",
+    )
+    local_ctx = AppContext(
+        session=SessionState(token="session-token-x"),
+        config_context=resolve_config_context(config_root=root, environ={}),
+    )
+    return TestClient(create_app(local_ctx)), local_ctx, env
+
+
+def test_state_with_unresolved_identity_returns_item_states(
+    unresolved_client: tuple[TestClient, AppContext, Path],
+) -> None:
+    client_u, ctx_u, _env = unresolved_client
+
+    r = client_u.get("/api/state", headers=_headers(ctx_u))
+
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["identities"][0]["source"] == "unresolved"
+    assert data["derived"][0]["status"] == "unresolved"
+    assert data["derived"][0]["computed_default"] is None
+    services = {s["service_id"]: s for s in data["services"]}
+    assert services["NEEDS_ID"]["resolved_token_url"] is None
+    assert services["NEEDS_ID"]["resolved_test_url"] is None
+    assert services["NEEDS_ID"]["token_url_unresolved_identities"] == ["WORK_EMAIL"]
+    assert services["NEEDS_ID"]["test_url_unresolved_identities"] == ["WORK_EMAIL"]
+    assert services["PLAIN"]["resolved_test_url"] == "https://plain.example.com/me"
+
+
+def test_test_one_with_unresolved_test_url_returns_409(
+    unresolved_client: tuple[TestClient, AppContext, Path],
+) -> None:
+    client_u, ctx_u, env = unresolved_client
+    env.write_text("NEEDS_ID_TOKEN=secret-token\n", encoding="utf-8")
+
+    r = client_u.post("/api/test/NEEDS_ID", headers=_headers(ctx_u))
+
+    assert r.status_code == 409
+    assert "WORK_EMAIL" in r.json()["message"]
+    assert "secret-token" not in r.text
+
+
+@respx.mock
+def test_test_all_continues_past_unresolved_test_url(
+    unresolved_client: tuple[TestClient, AppContext, Path],
+) -> None:
+    client_u, ctx_u, env = unresolved_client
+    env.write_text("NEEDS_ID_TOKEN=a\nPLAIN_TOKEN=b\n", encoding="utf-8")
+    respx.get("https://plain.example.com/me").mock(return_value=httpx.Response(200))
+
+    r = client_u.post("/api/test-all", headers=_headers(ctx_u))
+
+    assert r.status_code == 200, r.text
+    results = {item["service_id"]: item for item in r.json()["results"]}
+    assert results["NEEDS_ID"]["status"] == "failed"
+    assert "unresolved" in results["NEEDS_ID"]["error_message"]
+    assert "WORK_EMAIL" in results["NEEDS_ID"]["error_message"]
+    assert results["PLAIN"]["status"] == "working"
+
+
+@respx.mock
+def test_test_all_unresolved_failure_survives_state_refresh(
+    unresolved_client: tuple[TestClient, AppContext, Path],
+) -> None:
+    client_u, ctx_u, env = unresolved_client
+    env.write_text("NEEDS_ID_TOKEN=a\nPLAIN_TOKEN=b\n", encoding="utf-8")
+    respx.get("https://plain.example.com/me").mock(return_value=httpx.Response(200))
+
+    client_u.post("/api/test-all", headers=_headers(ctx_u))
+    refreshed = client_u.get("/api/state", headers=_headers(ctx_u)).json()
+
+    services = {s["service_id"]: s for s in refreshed["services"]}
+    assert services["NEEDS_ID"]["test_status"] == "failed"
+    assert services["PLAIN"]["test_status"] == "working"
+
+    env.write_text(
+        "NEEDS_ID_TOKEN=a\nPLAIN_TOKEN=b\nWORK_EMAIL=now@example.com\n",
+        encoding="utf-8",
+    )
+    resolved = client_u.get("/api/state", headers=_headers(ctx_u)).json()
+
+    services = {s["service_id"]: s for s in resolved["services"]}
+    assert services["NEEDS_ID"]["test_status"] == "set"
+
+
+def test_import_test_with_unresolved_test_url_fails_row(
+    unresolved_client: tuple[TestClient, AppContext, Path],
+) -> None:
+    client_u, ctx_u, _env = unresolved_client
+    r = client_u.post(
+        "/api/import/scan-dropped",
+        headers=_headers(ctx_u),
+        json={"filename": "src.env", "content": "NEEDS_ID_TOKEN=imported\n"},
+    )
+    scan_id = r.json()["scan_id"]
+
+    r2 = client_u.post(
+        "/api/import/test",
+        headers=_headers(ctx_u),
+        json={
+            "scanId": scan_id,
+            "sourceKey": "NEEDS_ID_TOKEN",
+            "targetKey": "NEEDS_ID_TOKEN",
+        },
+    )
+
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["status"] == "failed"
+    assert "unresolved" in r2.json()["error_message"]
+
+
+def test_token_save_works_and_skips_unresolved_derived(
+    unresolved_client: tuple[TestClient, AppContext, Path],
+) -> None:
+    client_u, ctx_u, env = unresolved_client
+
+    r = client_u.post(
+        "/api/token/NEEDS_ID", headers=_headers(ctx_u), json={"token": "saved"}
+    )
+
+    assert r.status_code == 200, r.text
+    assert r.json()["updated"] == ["NEEDS_ID_TOKEN"]
+    assert env.read_text(encoding="utf-8") == "NEEDS_ID_TOKEN=saved\n"
+
+
+def test_derived_default_rejects_unresolved_row(
+    unresolved_client: tuple[TestClient, AppContext, Path],
+) -> None:
+    client_u, ctx_u, _env = unresolved_client
+
+    r = client_u.post("/api/derived/WORK_USERNAME/default", headers=_headers(ctx_u))
+
+    assert r.status_code == 409
+
+
+def test_state_reports_detection_status_and_identity_diagnostics(tmp_path: Path) -> None:
+    env = tmp_path / "detect.env"
+    env.write_text("", encoding="utf-8")
+    root = tmp_path / "detect-config"
+    root.mkdir()
+    (root / "config.toml").write_text(
+        f"""
+version = 1
+
+[target]
+default_env_path = "{env.as_posix()}"
+
+[identities.WORK_EMAIL]
+source = "email_by_domain"
+domain = "example.com"
+""".strip(),
+        encoding="utf-8",
+    )
+    local_ctx = AppContext(
+        session=SessionState(token="session-token-x"),
+        config_context=resolve_config_context(config_root=root, environ={}),
+    )
+    local_client = TestClient(create_app(local_ctx))
+
+    r = local_client.get("/api/state", headers=_headers(local_ctx))
+
+    assert r.status_code == 200, r.text
+    data = r.json()
+    detection = data["identity_detection"]
+    assert detection["pending"] is False
+    assert detection["pending_deadline_seconds"] is None
+    assert detection["next_retry_seconds"] == pytest.approx(60.0, abs=1.0)
+    identity = data["identities"][0]
+    assert identity["detector"] is None
+    assert identity["diagnostics"] == ["windows_ad: unavailable in tests"]

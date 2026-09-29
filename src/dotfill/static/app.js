@@ -33,13 +33,25 @@ import {
   isDerivedDefaultInFlight,
 } from "./derived_default_state.js";
 import { formatVersionDisplay } from "./wrapper_display.js";
+import {
+  serviceMissingHint,
+  testAction,
+  tokenPageAction,
+} from "./service_actions.js";
+import { createDetectionScheduler } from "./detection_refresh.js";
 
 let sessionToken = null;
 let state = null;
 let appVersion = "";
 let bootstrapWrapper = null;
+let onDashboard = false;
 const derivedDefaultState = createDerivedDefaultState();
 let activeTheme = applyTheme(resolveInitialTheme());
+const detectionScheduler = createDetectionScheduler({
+  setTimer: (fn, ms) => setTimeout(fn, ms),
+  clearTimer: (handle) => clearTimeout(handle),
+  refresh: () => refreshDetection(),
+});
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -130,10 +142,27 @@ async function loadState(options = {}) {
     state = await api("GET", "/api/state");
     if (clearError) showError("");
     render();
+    detectionScheduler.update(state.identity_detection);
   } catch (e) {
     showError(`Failed to load state: ${e.message}`);
   }
 }
+
+// Background refresh for identity detection; never replaces an open wizard.
+async function refreshDetection() {
+  if (!sessionToken) return;
+  try {
+    state = await api("GET", "/api/state");
+    if (onDashboard) render();
+    detectionScheduler.update(state.identity_detection);
+  } catch {
+    // Keep the current view; the next manual refresh reports errors.
+  }
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && state) refreshDetection();
+});
 
 function badgeFor(status) {
   const labels = {
@@ -185,6 +214,7 @@ function renderDetected() {
     const valueText = i.effective_value || "(not detected)";
     const badge = statusLabel[i.source] || i.source;
     const badgeClass = i.source === "diverged" ? "source diverged" : i.source === "unresolved" ? "source unresolved" : "source";
+    const diagnostics = Array.isArray(i.diagnostics) ? i.diagnostics : [];
     return el(
       "div",
       { class: "id-row" },
@@ -192,15 +222,22 @@ function renderDetected() {
       el(
         "span",
         { class: `value ${i.effective_value ? "" : "empty"}` },
-        `= ${valueText}`
+        `= ${valueText}`,
+        diagnostics.length ? el("span", { class: "unresolved-hint" }, diagnostics.join("; ")) : null
       ),
-      el("span", { class: badgeClass }, badge)
+      el("span", { class: badgeClass, title: i.detector ? `via ${i.detector}` : null }, badge)
     );
   });
+  const pending = state.identity_detection && state.identity_detection.pending;
   return el(
     "div",
     { class: "id-section" },
-    el("div", { class: "id-section-title" }, "Identities"),
+    el(
+      "div",
+      { class: "id-section-title" },
+      "Identities",
+      pending ? el("span", { class: "detection-pending" }, " · detecting…") : null
+    ),
     ...rows
   );
 }
@@ -263,7 +300,9 @@ function renderDerived() {
                 icon("refresh"),
                 "Use default"
               )
-            : null;
+            : d.status === "unresolved"
+              ? el("span", { class: "unresolved-hint" }, `Needs ${d.source_identity_name}`)
+              : null;
       return el(
         "div",
         { class: "id-row" },
@@ -315,15 +354,22 @@ function renderServices() {
         )
       );
       if (s.token_present) {
+        const test = testAction(s);
         buttons.push(
           el(
             "button",
-            { class: "btn-small", onClick: () => testOne(s.service_id) },
+            {
+              class: "btn-small",
+              disabled: !test.available,
+              title: test.reason || "Test",
+              onClick: () => testOne(s.service_id),
+            },
             icon("flask"),
             "Test"
           )
         );
       }
+      const missingHint = serviceMissingHint(s);
 
       return el(
         "div",
@@ -336,7 +382,8 @@ function renderServices() {
             "div",
             { class: "svc-meta" },
             el("div", { class: "svc-name" }, s.display_name),
-            tokenDisplay
+            tokenDisplay,
+            missingHint ? el("span", { class: "unresolved-hint" }, missingHint) : null
           )
         ),
         el("div", { class: "svc-right" }, badgeFor(s.test_status), ...buttons)
@@ -396,6 +443,7 @@ function renderThemeToggle() {
 }
 
 function render() {
+  onDashboard = true;
   const root = $("#root");
   root.innerHTML = "";
   const config = state.config || {};
@@ -519,8 +567,10 @@ async function testAll() {
 // ---- Inline Wizards (replace dashboard content) ----
 
 function openTokenWizard(svc) {
+  onDashboard = false;
   const root = $("#root");
   root.innerHTML = "";
+  const tokenPage = tokenPageAction(svc);
 
   const input = el("input", {
     type: "text",
@@ -554,13 +604,15 @@ function openTokenWizard(svc) {
           el(
             "div",
             { class: "step-controls" },
-            el(
-              "a",
-              { href: svc.resolved_token_url, target: "_blank", rel: "noopener", class: "btn" },
-              icon("external"),
-              "Open token page"
-            ),
-            el("span", { class: "step-meta" }, svc.resolved_token_url)
+            tokenPage.available
+              ? el(
+                  "a",
+                  { href: tokenPage.url, target: "_blank", rel: "noopener", class: "btn" },
+                  icon("external"),
+                  "Open token page"
+                )
+              : el("span", { class: "unresolved-hint" }, `${tokenPage.reason}; open the token page manually.`),
+            tokenPage.available ? el("span", { class: "step-meta" }, tokenPage.url) : null
           )
         )
       ),
@@ -625,6 +677,7 @@ function openTokenWizard(svc) {
 }
 
 function openImportWizard() {
+  onDashboard = false;
   const root = $("#root");
   root.innerHTML = "";
 

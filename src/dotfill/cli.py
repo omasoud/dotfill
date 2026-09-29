@@ -186,6 +186,7 @@ def status(ctx: typer.Context) -> None:
             config_context,
             session,
             env_path_override=env_path,
+            detection_wait=None,
         )
     except DotfillError as exc:
         typer.echo(f"error: {exc}", err=True)
@@ -200,6 +201,8 @@ def status(ctx: typer.Context) -> None:
         identity_display = state.effective_config.identities[i.name].display
         eff = display_value(i.effective_value, identity_display) or "(unresolved)"
         typer.echo(f"  {i.name:<12} {eff}  [{i.source}]")
+        for diagnostic in i.diagnostics:
+            typer.echo(f"      {diagnostic}")
     typer.echo("derived:")
     for d in state.derived:
         derived_display = state.effective_config.derived_variables[
@@ -210,7 +213,13 @@ def status(ctx: typer.Context) -> None:
     typer.echo("services:")
     for s in state.services:
         token = s.masked_token or "(none)"
-        typer.echo(f"  {s.display_name:<14} {s.token_var:<24} {token}  [{s.test_status}]")
+        line = f"  {s.display_name:<14} {s.token_var:<24} {token}  [{s.test_status}]"
+        missing = sorted(
+            set(s.token_url_unresolved_identities) | set(s.test_url_unresolved_identities)
+        )
+        if missing:
+            line += f"  needs {', '.join(missing)}"
+        typer.echo(line)
 
 
 @config_app.command("path")

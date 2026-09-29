@@ -104,11 +104,65 @@ version = 1
 
 [identity.detectors.windows_ad]
 enabled = true
+priority = 20
+
+[identity.detectors.entra]
+enabled = false
+priority = 10
+# client_id = "00000000-0000-0000-0000-000000000000"
+# tenant = "organizations"
 ```
 
-Windows AD detection is enabled by default. If disabled, enabled identities cannot use Windows AD sources.
+| Detector | Default | Facts |
+|---|---|---|
+| `windows_ad` | enabled, priority 20 | SAM name, domain, `mail`, UPN, SMTP proxy addresses from the directory; SAM name and UPN from the Windows sign-in even when the directory is unreachable |
+| `entra` | disabled, priority 10 | `mail`, UPN, and SMTP proxy addresses from Microsoft Graph `/me` for the signed-in work or school account (Windows only) |
 
-The detector runs only when at least one enabled identity needs it.
+`priority` is an integer; lower values run first, and ties are ordered by
+detector name. Priorities are used by the `email_by_domain` source. dotfill
+config does not support arrays, so each detector carries its own priority.
+
+Detectors run only when an enabled identity needs them, in the background.
+The dashboard never waits more than about 2 seconds for them: it shows
+"detecting…" and refreshes itself when detection finishes. `dotfill status`
+waits for detection to finish. A lower-priority detector is skipped when
+higher-priority detectors already found every needed `email_by_domain`
+domain. Successful lookups are reused for the rest of the session; failed or
+incomplete lookups are retried with backoff (from 60 seconds up to 15 minutes),
+and an open dashboard rechecks when a retry is due or the page becomes visible
+again. Continued failures stay at the 15-minute backoff cap. Polling for pending
+detection stops at its deadline even if the configuration changes while a
+lookup is stalled.
+
+### Entra detector
+
+The `entra` detector asks the Windows sign-in broker for a Microsoft Graph
+token silently. It never shows a sign-in, account-picker, or consent prompt.
+It reads only `mail`, `userPrincipalName`, and `proxyAddresses` from Graph
+`/me`; non-SMTP proxy addresses such as `X500:` are ignored.
+
+- Without `client_id`, dotfill uses Microsoft's public Azure CLI client ID
+  (`04b07795-8ddb-461a-bbee-02f9e1bf7b46`) and requests the Microsoft Graph
+  resource. This needs no app registration, but it is best-effort: tenant
+  policy can require interaction or block the client.
+- Tokens for that built-in client carry the client's broad pre-authorized
+  delegated permissions, not just `User.Read`. dotfill keeps the token inside a
+  short-lived helper process for one `/me` call; it is never logged, written,
+  cached by dotfill, or returned to dotfill's API or browser. Only a dedicated
+  app registration consented for `User.Read` alone yields a least-privilege
+  token.
+- With `client_id`, dotfill requests `User.Read` for that app registration.
+  Register it as a public client with the delegated `User.Read` permission and
+  the Web Account Manager redirect URI
+  `ms-appx-web://Microsoft.AAD.BrokerPlugin/<client-id>`.
+- `tenant` selects the authority: `organizations` (default), a tenant GUID, or
+  a tenant DNS domain.
+
+If silent acquisition fails, affected identities fall back to lower-priority
+detectors and then to explicit `.env` values.
+
+A pinned source (`windows_ad.*`, `entra.*`) requires its detector to be
+enabled. `email_by_domain` requires at least one enabled detector.
 
 ## Identities
 
@@ -150,7 +204,20 @@ source = "local_part"
 from = "WORK_EMAIL"
 ```
 
-### Windows AD Email By Domain
+### Email By Domain
+
+```toml
+version = 1
+
+[identities.WORK_EMAIL]
+source = "email_by_domain"
+domain = "example.com"
+```
+
+Uses the first email in `domain` found by the enabled detectors in priority
+order. The dashboard and `dotfill status` show which detector supplied it.
+
+### Detector-Specific Email By Domain
 
 ```toml
 version = 1
@@ -158,7 +225,13 @@ version = 1
 [identities.WORK_EMAIL]
 source = "windows_ad.email_by_domain"
 domain = "example.com"
+
+[identities.CLOUD_EMAIL]
+source = "entra.email_by_domain"
+domain = "example.com"
 ```
+
+These read facts only from the named detector.
 
 ### Windows AD Account Facts
 
@@ -179,11 +252,19 @@ Supported sources:
 | `literal` | `value` |
 | `env` | `name` |
 | `local_part` | `from` |
+| `email_by_domain` | `domain` |
 | `windows_ad.email_by_domain` | `domain` |
+| `entra.email_by_domain` | `domain` |
 | `windows_ad.sam` | none |
 | `windows_ad.domain` | none |
 
 All identity tables support `enabled = false`.
+
+An identity that cannot be resolved never stops dotfill from loading. It is
+shown as unresolved with a short reason. Derived variables that copy it are
+shown as unresolved and cannot be filled. A service URL that references it is
+unavailable: the token-page link or Test action is disabled, and the other
+URL and token saving keep working.
 
 Identity `compare` controls whether explicit `.env` identity values align with detected values. With `compare = "casefold"`, `Alice@Example.com` and `alice@example.com` are aligned, and the explicit `.env` value remains the effective value.
 

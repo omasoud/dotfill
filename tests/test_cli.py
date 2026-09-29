@@ -108,6 +108,42 @@ display_name = "Bad"
     assert "error:" in result.stderr
 
 
+def test_status_reports_unresolved_items_without_failing(tmp_path: Path) -> None:
+    env = tmp_path / ".env"
+    env.write_text("", encoding="utf-8")
+    config_root = tmp_path / "config"
+    config_root.mkdir()
+    (config_root / "config.toml").write_text(
+        """
+version = 1
+
+[identities.WORK_EMAIL]
+source = "env"
+name = "DOTFILL_TEST_MISSING_WORK_EMAIL"
+
+[derived.WORK_USERNAME]
+from_identity = "WORK_EMAIL"
+
+[services.EXAMPLE]
+display_name = "Example"
+token_var = "EXAMPLE_TOKEN"
+token_url = "https://svc.example.com/{WORK_EMAIL}/tokens"
+test_url = "https://svc.example.com/me"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        ["--config-root", str(config_root), "--env-path", str(env), "status"],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert "(unresolved)  [unresolved]" in result.stdout
+    assert "[unresolved]" in result.stdout.split("derived:")[1]
+    assert "needs WORK_EMAIL" in result.stdout
+
+
 def test_run_cli_returns_typer_integer_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

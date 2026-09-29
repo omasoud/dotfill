@@ -35,6 +35,8 @@ src/dotfill/
   errors.py
   icons.py
   identity.py
+  identity_detectors.py
+  identity_entra.py
   identity_facts.py
   identity_rules.py
   import_scan.py
@@ -159,6 +161,10 @@ Config models live in `config_models.py`:
 `IdentityDefinition` and `DerivedVariableDefinition` carry display and compare
 metadata.
 
+`IdentityDetectorConfig` carries one entry per supported detector (`windows_ad`,
+`entra`) with `enabled` and `priority`; the `entra` entry also carries
+`client_id` and `tenant`. It exposes the enabled detectors in priority order.
+
 Runtime/API models live in `models.py`:
 
 - `PrimaryIdentityState`
@@ -172,6 +178,18 @@ Runtime/API models live in `models.py`:
 
 `TestResult.fingerprint` is non-secret, session-scoped, and used only to decide whether cached status still applies.
 
+`PrimaryIdentityState` carries the detector that supplied a detected value and
+non-secret diagnostics for unresolved detector-sourced identities.
+`DerivedVariableState.status` includes `unresolved`, with `computed_default`
+set to `None`. `ServiceState.resolved_token_url` and `resolved_test_url` are
+resolved independently; each is `None` when its own template needs an
+unresolved identity, and `ServiceState.token_url_unresolved_identities` /
+`test_url_unresolved_identities` list the missing names per URL.
+`SessionState` holds the per-process identity detector runner and cache.
+`AppState.identity_detection` reports `pending`, `pending_deadline_seconds`
+(an upper bound on the current pass's remaining time), and
+`next_retry_seconds` (when the next backoff retry becomes due, or `None`).
+
 ## State Construction
 
 `resolver.build_app_state(config_context, session, env_path_override=None)` is the shared state pipeline:
@@ -183,19 +201,27 @@ Runtime/API models live in `models.py`:
 3. Read `.env` into `EnvDocument`.
 4. Compute managed variables from enabled identity names, derived names, and service token variables.
 5. Reject duplicate managed variables.
-6. Run Windows AD detection only when an enabled identity source needs AD facts.
+6. Request identity detection in priority order, waiting at most the state wait
+   budget for background detector runs (see Identity Detectors).
 7. Evaluate identity rules.
 8. Resolve explicit `.env` identity overrides against detected values using
    each identity's comparison mode.
-9. Build derived variable states using each derived variable's comparison mode.
-10. Resolve service token/test URLs.
+9. Build derived variable states using each derived variable's comparison
+   mode; a derived variable whose source identity is unresolved becomes
+   `unresolved`.
+10. Resolve each service's token URL and test URL independently; a template
+    that needs an unresolved identity leaves only that URL unresolved.
 11. Apply cached test status only when the service-test fingerprint matches.
 
-State is rebuilt on each API state request, so TOML edits are visible after refresh.
+State is rebuilt on each API state request, so TOML edits are visible after
+refresh. Unresolved identities never raise from state construction.
 
 ## Identity Design
 
-Windows AD probing returns generic facts:
+### Identity Detectors
+
+Detectors produce generic `IdentityFacts` (the facts model shared by Windows AD
+and Entra):
 
 - `sam`
 - `domain`
@@ -204,6 +230,130 @@ Windows AD probing returns generic facts:
 - `proxy_addresses`
 - normalized `emails`
 - `diagnostics`
+
+Supported detectors:
+
+| Detector | Default enabled | Default priority | Facts |
+|---|---|---|---|
+| `entra` | no | 10 | `mail`, `user_principal_name`, `proxy_addresses`, `emails` |
+| `windows_ad` | yes | 20 | all fields |
+
+Config uses per-detector integer `priority` values because dotfill config does
+not support arrays:
+
+```toml
+[identity.detectors.entra]
+enabled = true
+priority = 10
+# client_id = "00000000-0000-0000-0000-000000000000"  # optional override
+# tenant = "organizations"                            # optional
+
+[identity.detectors.windows_ad]
+enabled = true
+priority = 20
+
+[identities.WORK_EMAIL]
+source = "email_by_domain"
+domain = "example.com"
+```
+
+`identity_detectors.py` owns detector ordering and caching:
+
+1. Collect detectors required by pinned sources (`windows_ad.*`, `entra.*`).
+   Validation rejects a pinned source whose detector is disabled.
+2. Collect the domains needed by `email_by_domain` identities that have no
+   explicit non-empty `.env` override.
+3. Walk enabled detectors in `(priority, name)` order. Run a detector when it
+   is pinned-required, or when at least one needed `email_by_domain` domain is
+   still unmatched by higher-priority detectors. Otherwise skip it.
+4. Evaluate `email_by_domain` against the collected facts in priority order;
+   the first matching email wins, and the result records the detector name.
+
+When the preferred detector already satisfies every needed domain, the
+lower-priority detector does not run. That avoids a slow directory probe on
+off-network or broken-Kerberos devices.
+
+#### Detector outcomes and caching
+
+Each detector run returns facts plus an outcome:
+
+| Outcome | Meaning | Cache behavior |
+|---|---|---|
+| `complete` | Primary lookup finished (AD: LDAP search completed, with or without a match; Entra: Graph `/me` returned 2xx) | Reused for the process lifetime |
+| `partial` | Some facts collected, primary lookup did not finish (for example in-process UPN + LDAP timeout) | Facts used now; retried with backoff |
+| `failed` | No usable facts | Retried with backoff |
+
+The cache in `SessionState` is keyed by detector name and a fingerprint of that
+detector's config, so config changes invalidate entries. Partial and failed
+entries record `next_retry_at`. The backoff starts at 60 seconds, doubles after
+each non-complete run, is capped at 15 minutes, and resets after a complete
+run or a detector configuration change. Each entry stores its capped retry
+delay; doubling that delay avoids exponent overflow during long failure
+streaks. A partial result whose facts miss a needed domain can therefore upgrade
+to complete, for example after a VPN reconnect. Results are held only in memory.
+
+#### Background runner
+
+A per-session `DetectorRunner` owns execution:
+
+- Detection runs as a background pass on a worker thread. The pass walks the
+  needed detectors in priority order. After each detector finishes, it
+  re-evaluates which needed domains remain unmatched and immediately starts
+  the next needed detector. A slow Entra failure is therefore followed by the
+  AD run within the same pass, with no new state request.
+- Each detector is single-flight, and only one pass runs at a time: concurrent
+  state builds join the in-flight pass instead of starting duplicate probes.
+- The runner remembers the latest request. If the config changes while a pass
+  for the old config runs, the new request's needed detectors are reported as
+  pending. Their absolute deadline is the running pass's fixed deadline plus
+  their queued timeouts. The reported remaining time shrinks to zero even if
+  the old pass stalls; repeated state requests do not renew the queued timeout.
+  When the old pass ends, the runner immediately starts a pass for the latest
+  request, without waiting for another state build.
+- A state build waits for the pass up to a wait budget (default 2 seconds),
+  then evaluates rules against the facts currently available. Identities that
+  are still waiting are `unresolved` with a `detection pending` diagnostic.
+  `identity_detection.pending` stays `true` until the whole pass finishes. When
+  a pass starts, the runner fixes an absolute deadline: the sum of the timeouts
+  of the detectors queued for the pass, plus a small margin (5 seconds).
+  `pending_deadline_seconds` is the time left until that deadline, never
+  negative, so it shrinks to zero even if a detector hangs.
+- While `pending` is true, the dashboard shows a pending indicator and
+  re-fetches state every 2 seconds while the server-reported
+  `pending_deadline_seconds` is positive, stopping when `pending` clears or
+  the deadline reaches zero. The bound comes from the server, not from a single
+  detector's timeout.
+- Backoff retries become due on the runner's clock. The next state build starts
+  a due retry in the background, so a retry never stalls a refresh beyond the
+  wait budget. When unresolved identities have a scheduled retry, state reports
+  `next_retry_seconds`. The dashboard schedules one state fetch for that time
+  and also re-fetches when the page becomes visible again. The first fetch
+  starts the retry pass, and polling takes over from there, so an open
+  dashboard recovers, for example after a VPN reconnect, without a manual
+  refresh.
+- One-shot CLI commands (`status`) use an unbounded wait budget: they wait
+  until their own request's detectors have run, including after an in-flight
+  pass for a different config, bounded by detector timeouts.
+
+Tests use an injectable clock and fake detectors, not real probes or threads
+where avoidable.
+
+### Windows AD Detector
+
+The Windows AD detector reads the current user's SAM-compatible name and UPN
+in-process with `GetUserNameExW` (`NameSamCompatible`, `NameUserPrincipal`).
+That call does not contact a directory controller, so those facts, including
+the UPN as an email candidate, survive when the LDAP probe fails or times out.
+The PowerShell probe still performs the LDAP lookup for `mail` and
+`proxyAddresses`. A run whose LDAP lookup fails or times out is `partial` when
+the in-process facts exist, and it is retried; it is never cached as
+`complete`.
+
+Probe timeouts and failures produce short diagnostics such as
+`windows_ad: directory lookup timed out after 15s`. They never include the
+generated script, command line, or `subprocess.TimeoutExpired` text, which can
+contain those arguments. Stdout already emitted before a timeout may still be
+parsed.
 
 ### Windows AD Bind Strategy
 
@@ -236,14 +386,81 @@ directory domain. Tests should exercise domain selection and validation,
 explicit-bind construction, compatibility fallback, successful empty results,
 and diagnostic parsing without requiring a live directory.
 
+### Entra Detector
+
+`identity_entra.py` runs a Windows PowerShell 5.1 helper (WinRT is not
+projected in PowerShell 7) with `-NoProfile -NonInteractive` and a hard
+timeout. The helper:
+
+1. finds the `https://login.microsoft.com` Web Account Manager provider for the
+   configured authority (default `organizations`);
+2. requests a token with `WebAuthenticationCoreManager.GetTokenSilentlyAsync`
+   using exactly one request form per client mode, with no automatic format
+   fallback:
+   - built-in client ID: empty scope plus request property
+     `resource = https://graph.microsoft.com`;
+   - configured `client_id`: scope `User.Read` plus request property
+     `resource = https://graph.microsoft.com`, following Microsoft's WAM
+     example.
+
+   It never calls `RequestTokenAsync`, so it cannot show UI;
+3. calls `GET https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName,proxyAddresses`;
+4. discards the token and prints only `MAIL:`, `UPN:`, `PROXY:`, and `ERR:`
+   lines using the same protocol as the Windows AD probe. `PROXY:` lines carry
+   only `smtp:`/`SMTP:` proxy addresses; other types such as `X500:` are
+   dropped.
+
+The built-in client ID is Microsoft's Azure CLI public client
+(`04b07795-8ddb-461a-bbee-02f9e1bf7b46`), which Microsoft pre-authorizes for
+Microsoft Graph. Field evidence from one cloud-joined device and tenant
+(2026-09-28, password and Windows Hello PIN sign-in, silent requests):
+
+| Client | Request form | Result | Effective `scp` |
+|---|---|---|---|
+| Azure CLI (built-in) | empty scope + Graph resource | success, `/me` 200 | 9 broad delegated scopes, including `Directory.AccessAsUser.All` and `User.ReadWrite.All` |
+| Azure CLI | `User.Read` + Graph resource | `AADSTS65002` (not pre-authorized) | — |
+| Azure CLI | `https://graph.microsoft.com/User.Read`, with or without `wam_compat=2.0` | `AADSTS65002` | — |
+| Graph PowerShell | any of the forms above | success, `/me` 200 | same 12 broad scopes regardless of requested scope |
+
+So requesting `User.Read` does not narrow tokens for Microsoft first-party
+clients. For the built-in ID, `AADSTS65002` is an authorization answer, not a
+request-format error. The built-in mode therefore uses only the resource form.
+Only a dedicated app registration consented for `User.Read` alone can yield a
+least-privilege token; that remains unverified until such a registration is
+available.
+
+That evidence is not a guarantee. A tenant's Conditional Access, token
+protection, or client restrictions can require interaction or block the
+client, so the detector is best-effort. Silent failures produce `failed` with
+distinct short diagnostics, such as `entra: sign-in interaction required` or
+`entra: client not authorized for Microsoft Graph` (`AADSTS65002`). Identities
+then fall back to lower-priority detectors and finally to explicit `.env`
+values. Tenants that block the built-in ID can configure an approved app
+registration (public client, delegated `User.Read`, Web Account Manager
+redirect URI) through `client_id`.
+
+Because built-in-mode tokens carry broad delegated scopes, the token must not
+leave the helper process. The helper must use it only for the single `/me`
+request.
+
+Configured `client_id` must be a GUID. `tenant` must be `organizations`, a GUID,
+or a DNS-safe domain. Values are validated before interpolation into the helper
+script. Silent-token failures such as `UserInteractionRequired`, provider
+errors, Graph HTTP errors, and non-Windows platforms become short non-secret
+diagnostics and never raise from state construction.
+
+### Identity Rules
+
 Identity rules map config to values. Supported sources:
 
 - `literal`
 - `env`
 - `local_part`
+- `email_by_domain`
 - `windows_ad.email_by_domain`
 - `windows_ad.sam`
 - `windows_ad.domain`
+- `entra.email_by_domain`
 
 Identity state source values are:
 
@@ -255,6 +472,11 @@ Identity state source values are:
   detected value under the identity comparison mode.
 - `unresolved`: neither an explicit non-empty `.env` value nor a detected value
   is available.
+
+An unresolved identity never raises from state construction. Dependent
+`local_part` identities, derived variables, and service URL templates report
+their own unresolved state. Unresolved detector-sourced identities carry the
+short non-secret diagnostics from the detectors that were consulted.
 
 Identity aligned/diverged decisions use the configured identity comparison mode.
 When values are equivalent under `casefold`, the state is `aligned` and the
@@ -284,6 +506,8 @@ Derived state values are:
   under the derived comparison mode.
 - `diverged`: the current non-empty `.env` value differs from the computed
   default under the derived comparison mode.
+- `unresolved`: the source identity is unresolved; `computed_default` is
+  `None` and any current value is still reported.
 
 Derived aligned/diverged decisions use the configured derived comparison mode.
 When values are equivalent under `casefold`, the state is `aligned`; dotfill
@@ -365,6 +589,23 @@ Supported auth kinds:
 `kind = "query"` is not supported until redacted URL handling is implemented
 and tested.
 
+Service URL templates resolve per service and per URL during state
+construction. `token_url` and `test_url` are independent. When one of them
+needs an unresolved identity, only that URL is `None`, and its
+`*_unresolved_identities` list names the missing values; the service keeps its
+token state and the other URL. The dashboard disables only the token-page link
+or only the test action accordingly. Test endpoints treat
+`UnresolvedIdentityError` like `UrlTemplateError`:
+
+- `POST /api/test/{service_id}` returns a non-secret `409`;
+- `POST /api/test-all` records a per-service failure naming the missing
+  identities and continues. The failure is cached with a fingerprint of the
+  service, token digest, and missing identity names, so a state refresh keeps
+  showing `failed` until the identities resolve or the token changes; and
+- `POST /api/import/test` reports a failure for that row.
+
+Token saves are unaffected.
+
 `run_service_test` prepares a request centrally:
 
 - start with `Accept: application/json`;
@@ -375,9 +616,7 @@ and tested.
 - resolve basic `username_identity` at test time using current identity state.
 
 An unresolved basic `username_identity` fails only that service test with
-non-secret error context; it does not block dashboard state construction unless
-the same identity is also required by a derived variable, service URL template,
-or dependent identity rule.
+non-secret error context; it never blocks dashboard state construction.
 
 TLS verification defaults to enabled. `tls_verify = false` must be explicit in TOML.
 
@@ -514,6 +753,9 @@ The dashboard shows:
 - dynamic identities;
 - dynamic derived variables;
 - dynamic services;
+- unresolved identities, derived variables, and service URLs inline with a
+  short non-secret reason, disabling only the actions that need the missing
+  value;
 - empty service state;
 - session backup status.
 
@@ -579,7 +821,10 @@ Core verification is pytest-based:
 
 - config paths, loader, merge, and validation;
 - identity facts and rules;
-- resolver state construction;
+- identity detector ordering, lazy execution, session caching, AD in-process
+  UPN fallback, Entra helper parsing and failure handling with injected
+  results (no live directory or network);
+- resolver state construction, including non-blocking unresolved identities;
 - save/backup behavior;
 - import scan and commit;
 - service tests and secret-safe logging;

@@ -8,8 +8,9 @@ import pytest
 
 from dotfill.config_models import AuthConfig
 from dotfill.config_paths import resolve_config_context
-from dotfill.errors import DuplicateManagedVariableError, UnresolvedIdentityError
-from dotfill.identity_facts import make_ad_facts
+from dotfill.errors import DuplicateManagedVariableError
+from dotfill.identity_detectors import DetectorRunner, DetectorSpec
+from dotfill.identity_facts import DetectorResult, IdentityFacts
 from dotfill.models import SessionState, TestResult as DotfillTestResult
 from dotfill.resolver import _mask_token, build_app_state, service_test_fingerprint
 
@@ -200,7 +201,6 @@ test_url = "https://service.example.com/me"
     state = build_app_state(
         _context(config_root),
         _session(),
-        ad_facts_override=make_ad_facts(diagnostics=["AD unavailable"]),
     )
 
     by_name = {i.name: i for i in state.identities}
@@ -220,9 +220,11 @@ def test_duplicate_configured_identity_blocks_state(tmp_path: Path) -> None:
         build_app_state(_context(config_root), _session())
 
 
-def test_unresolved_identity_required_by_derived_blocks_state(tmp_path: Path) -> None:
+def test_unresolved_identity_required_by_derived_reports_unresolved(
+    tmp_path: Path,
+) -> None:
     env = tmp_path / ".env"
-    env.write_text("", encoding="utf-8")
+    env.write_text("WORK_USERNAME=kept@example.com\n", encoding="utf-8")
     config_root = tmp_path / "config"
     config_root.mkdir()
     (config_root / "config.toml").write_text(
@@ -242,8 +244,83 @@ from_identity = "WORK_EMAIL"
         encoding="utf-8",
     )
 
-    with pytest.raises(UnresolvedIdentityError):
-        build_app_state(_context(config_root), _session())
+    state = build_app_state(_context(config_root), _session())
+
+    derived = state.derived[0]
+    assert derived.status == "unresolved"
+    assert derived.computed_default is None
+    assert derived.current_value == "kept@example.com"
+    assert state.identities[0].source == "unresolved"
+
+
+def _write_one_sided_url_config(
+    root: Path, *, env_path: Path, token_url: str, test_url: str
+) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "config.toml").write_text(
+        f"""
+version = 1
+
+[target]
+default_env_path = "{env_path.as_posix()}"
+
+[identities.WORK_EMAIL]
+source = "env"
+name = "DOTFILL_MISSING_TEST_ENV"
+
+[identities.WORK_HOST]
+source = "literal"
+value = "host.example.com"
+
+[services.EXAMPLE]
+display_name = "Example"
+token_var = "EXAMPLE_TOKEN"
+token_url = "{token_url}"
+test_url = "{test_url}"
+""".strip(),
+        encoding="utf-8",
+    )
+
+
+def test_unresolved_token_url_keeps_test_url(tmp_path: Path) -> None:
+    env = tmp_path / ".env"
+    env.write_text("EXAMPLE_TOKEN=supersecrettoken\n", encoding="utf-8")
+    config_root = tmp_path / "config"
+    _write_one_sided_url_config(
+        config_root,
+        env_path=env,
+        token_url="https://{WORK_HOST}/users/{WORK_EMAIL}/tokens",
+        test_url="https://{WORK_HOST}/me",
+    )
+
+    state = build_app_state(_context(config_root), _session())
+
+    service = state.services[0]
+    assert service.resolved_token_url is None
+    assert service.token_url_unresolved_identities == ["WORK_EMAIL"]
+    assert service.resolved_test_url == "https://host.example.com/me"
+    assert service.test_url_unresolved_identities == []
+    assert service.test_status == "set"
+
+
+def test_unresolved_test_url_keeps_token_url(tmp_path: Path) -> None:
+    env = tmp_path / ".env"
+    env.write_text("", encoding="utf-8")
+    config_root = tmp_path / "config"
+    _write_one_sided_url_config(
+        config_root,
+        env_path=env,
+        token_url="https://{WORK_HOST}/tokens",
+        test_url="https://{WORK_HOST}/users/{WORK_EMAIL}",
+    )
+
+    state = build_app_state(_context(config_root), _session())
+
+    service = state.services[0]
+    assert service.resolved_token_url == "https://host.example.com/tokens"
+    assert service.token_url_unresolved_identities == []
+    assert service.resolved_test_url is None
+    assert service.test_url_unresolved_identities == ["WORK_EMAIL"]
 
 
 def test_derived_status_missing_aligned_diverged(tmp_path: Path) -> None:
@@ -634,21 +711,30 @@ enabled = false
     assert state.services == []
 
 
-def test_ad_probe_not_run_without_ad_dependent_identity(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_ad_probe_not_run_without_ad_dependent_identity(tmp_path: Path) -> None:
     env = tmp_path / ".env"
     env.write_text("", encoding="utf-8")
     config_root = tmp_path / "config"
     _write_config(config_root, env_path=env)
+    calls: list[str] = []
 
-    def fail_probe():
-        raise AssertionError("AD probe should not run")
+    def record(name: str) -> DetectorSpec:
+        def run(_settings: object) -> DetectorResult:
+            calls.append(name)
+            return DetectorResult(detector=name, facts=IdentityFacts(), outcome="failed")
 
-    monkeypatch.setattr("dotfill.resolver.detect_ad_facts", fail_probe)
+        return DetectorSpec(name, run, 1.0)
 
-    state = build_app_state(_context(config_root), _session())
+    session = SessionState(
+        token="test-session-token",
+        detector_runner=DetectorRunner(
+            {"windows_ad": record("windows_ad"), "entra": record("entra")}
+        ),
+    )
 
+    state = build_app_state(_context(config_root), session)
+
+    assert calls == []
     assert {identity.name for identity in state.identities} == {
         "WORK_EMAIL",
         "WORK_USER",

@@ -2,20 +2,33 @@
 
 from __future__ import annotations
 
+import subprocess
 from unittest.mock import patch
 
 import pytest
 
 from dotfill.identity import (
+    WINDOWS_AD_TIMEOUT_SECONDS,
     _RawProbe,
     _build_probe_script,
+    _parse_probe_output,
+    _run_powershell_probe,
     _search_domain_hint,
-    detect_ad_facts,
+    _split_sam_compatible,
+    detect_windows_ad,
     resolve_primary_identity,
 )
 
 
-def test_detect_ad_facts_collects_generic_probe_fields() -> None:
+def _detect(probe: _RawProbe, logon: tuple[str | None, str | None] = (None, None)):
+    with (
+        patch("dotfill.identity._run_powershell_probe", return_value=probe),
+        patch("dotfill.identity._windows_logon_names", return_value=logon),
+    ):
+        return detect_windows_ad()
+
+
+def test_detect_windows_ad_collects_generic_probe_fields() -> None:
     fake_probe = _RawProbe(
         sam="jdoe",
         domain="CORP",
@@ -26,11 +39,14 @@ def test_detect_ad_facts_collects_generic_probe_fields() -> None:
             "j.doe@service.example.com",
         ],
         errors=[],
+        lookup_completed=True,
     )
 
-    with patch("dotfill.identity._run_powershell_probe", return_value=fake_probe):
-        result = detect_ad_facts()
+    detected = _detect(fake_probe)
+    result = detected.facts
 
+    assert detected.detector == "windows_ad"
+    assert detected.outcome == "complete"
     assert result.sam == "jdoe"
     assert result.domain == "CORP"
     assert result.mail == "John.Doe@example.com"
@@ -46,24 +62,113 @@ def test_detect_ad_facts_collects_generic_probe_fields() -> None:
     ]
 
 
-def test_detect_ad_facts_allows_missing_email_fields() -> None:
-    fake_probe = _RawProbe(sam="jdoe", domain="CORP", errors=[])
+def test_detect_windows_ad_allows_missing_email_fields() -> None:
+    fake_probe = _RawProbe(sam="jdoe", domain="CORP", errors=[], lookup_completed=True)
 
-    with patch("dotfill.identity._run_powershell_probe", return_value=fake_probe):
-        result = detect_ad_facts()
+    detected = _detect(fake_probe)
 
-    assert result.sam == "jdoe"
-    assert result.domain == "CORP"
-    assert result.emails == []
+    assert detected.facts.sam == "jdoe"
+    assert detected.facts.domain == "CORP"
+    assert detected.facts.emails == []
+    assert detected.outcome == "complete"
 
 
-def test_detect_ad_facts_preserves_diagnostics() -> None:
-    fake_probe = _RawProbe(errors=["probe failed"])
+def test_detect_windows_ad_prefixes_diagnostics_and_fails_without_facts() -> None:
+    detected = _detect(_RawProbe(errors=["probe failed"]))
 
-    with patch("dotfill.identity._run_powershell_probe", return_value=fake_probe):
-        result = detect_ad_facts()
+    assert detected.facts.diagnostics == ["windows_ad: probe failed"]
+    assert detected.outcome == "failed"
 
-    assert result.diagnostics == ["probe failed"]
+
+def test_detect_windows_ad_keeps_in_process_upn_when_lookup_fails() -> None:
+    detected = _detect(
+        _RawProbe(errors=["directory lookup timed out after 15s"]),
+        logon=("CORP\\jdoe", "jdoe@example.com"),
+    )
+
+    assert detected.outcome == "partial"
+    assert detected.facts.sam == "jdoe"
+    assert detected.facts.domain == "CORP"
+    assert detected.facts.user_principal_name == "jdoe@example.com"
+    assert detected.facts.emails == ["jdoe@example.com"]
+    assert detected.facts.diagnostics == [
+        "windows_ad: directory lookup timed out after 15s"
+    ]
+
+
+def test_detect_windows_ad_prefers_directory_upn_over_local() -> None:
+    detected = _detect(
+        _RawProbe(upn="dir@example.com", errors=[], lookup_completed=True),
+        logon=("CORP\\jdoe", "local@example.com"),
+    )
+
+    assert detected.facts.user_principal_name == "dir@example.com"
+
+
+def test_parse_probe_output_marks_completed_lookup() -> None:
+    completed = _parse_probe_output("SAM:jdoe\nDOMAIN:CORP\nMAIL:\n")
+    failed = _parse_probe_output("SAM:jdoe\nMAIL:\nERR:serverless bind: failed\n")
+    unfinished = _parse_probe_output("SAM:jdoe\nDOMAIN:CORP\n")
+
+    assert completed.lookup_completed is True
+    assert failed.lookup_completed is False
+    assert unfinished.lookup_completed is False
+
+
+def test_probe_timeout_diagnostic_omits_script_and_keeps_partial_output() -> None:
+    script_marker = "Write-Output"
+
+    def timeout(*args: object, **kwargs: object) -> None:
+        raise subprocess.TimeoutExpired(
+            cmd=["powershell.exe", "-Command", f"{script_marker} secret-script"],
+            timeout=WINDOWS_AD_TIMEOUT_SECONDS,
+            output="SAM:jdoe\nDOMAIN:CORP\n",
+        )
+
+    with (
+        patch("dotfill.identity.shutil.which", return_value="powershell.exe"),
+        patch("dotfill.identity.subprocess.run", side_effect=timeout),
+    ):
+        probe = _run_powershell_probe()
+
+    assert probe.sam == "jdoe"
+    assert probe.domain == "CORP"
+    assert probe.lookup_completed is False
+    assert probe.errors == ["directory lookup timed out after 15s"]
+    assert all(script_marker not in error for error in probe.errors or [])
+
+
+def test_probe_nonzero_exit_omits_stderr() -> None:
+    completed = subprocess.CompletedProcess(
+        args=["powershell.exe"],
+        returncode=1,
+        stdout="SAM:jdoe\nMAIL:\n",
+        stderr="At line:1 char:1 Write-Output secret-script",
+    )
+
+    with (
+        patch("dotfill.identity.shutil.which", return_value="powershell.exe"),
+        patch("dotfill.identity.subprocess.run", return_value=completed),
+    ):
+        probe = _run_powershell_probe()
+
+    assert probe.errors == ["PowerShell exit code 1"]
+    assert probe.lookup_completed is False
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("CORP\\jdoe", ("jdoe", "CORP")),
+        ("jdoe", ("jdoe", None)),
+        (None, (None, None)),
+        ("", (None, None)),
+    ],
+)
+def test_split_sam_compatible(
+    value: str | None, expected: tuple[str | None, str | None]
+) -> None:
+    assert _split_sam_compatible(value) == expected
 
 
 def test_resolve_primary_identity_diverged() -> None:

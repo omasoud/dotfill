@@ -9,6 +9,8 @@ from typing import Literal
 DisplayMode = Literal["plain", "masked"]
 CompareMode = Literal["exact", "casefold"]
 AuthKind = Literal["bearer", "header", "basic"]
+DetectorName = Literal["windows_ad", "entra"]
+DETECTOR_NAMES: tuple[DetectorName, ...] = ("entra", "windows_ad")
 
 
 @dataclass(frozen=True)
@@ -19,10 +21,46 @@ class TargetConfig:
 
 
 @dataclass(frozen=True)
-class IdentityDetectorConfig:
-    """Configured identity detector switches."""
+class WindowsAdDetectorConfig:
+    """Windows Active Directory detector settings."""
 
-    windows_ad_enabled: bool = True
+    enabled: bool = True
+    priority: int = 20
+
+
+@dataclass(frozen=True)
+class EntraDetectorConfig:
+    """Entra ID (Microsoft Graph) detector settings."""
+
+    enabled: bool = False
+    priority: int = 10
+    client_id: str | None = None
+    tenant: str = "organizations"
+
+
+@dataclass(frozen=True)
+class IdentityDetectorConfig:
+    """Configured identity detectors."""
+
+    windows_ad: WindowsAdDetectorConfig = field(default_factory=WindowsAdDetectorConfig)
+    entra: EntraDetectorConfig = field(default_factory=EntraDetectorConfig)
+
+    def settings(self, name: DetectorName) -> WindowsAdDetectorConfig | EntraDetectorConfig:
+        """Return the settings object for one detector."""
+        return self.windows_ad if name == "windows_ad" else self.entra
+
+    def is_enabled(self, name: DetectorName) -> bool:
+        """Return whether the named detector is enabled."""
+        return self.settings(name).enabled
+
+    def enabled_in_priority_order(self) -> list[DetectorName]:
+        """Return enabled detector names ordered by `(priority, name)`."""
+        ranked = sorted(
+            (self.settings(name).priority, name)
+            for name in DETECTOR_NAMES
+            if self.settings(name).enabled
+        )
+        return [name for _, name in ranked]
 
 
 @dataclass(frozen=True)

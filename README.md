@@ -155,7 +155,11 @@ When no services are configured, the dashboard shows an empty generic state.
 
 ## Privacy
 
-- No cloud backend, accounts, telemetry, or remote sync.
+- No dotfill-operated cloud backend, accounts, telemetry, or remote sync.
+- The optional `entra` identity detector (disabled by default) silently queries
+  Microsoft Graph `/me` for the signed-in work or school account. Its token
+  stays inside a short-lived helper process and is never logged or stored. See
+  [docs/config-schema.md](docs/config-schema.md#entra-detector).
 - Raw token values are not returned by state/import APIs.
 - Dropped import values are kept only in backend session memory as secret values.
 - The browser keeps session and token input in memory only; no browser storage is used.

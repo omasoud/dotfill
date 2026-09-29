@@ -8,19 +8,27 @@ import hmac
 import json
 from pathlib import Path
 
-from .config import collect_managed_variable_names, resolve_url_template
+from .config import (
+    collect_managed_variable_names,
+    resolve_url_template,
+    unresolved_template_identities,
+)
 from .config_loader import load_effective_config
 from .config_models import AuthConfig, EffectiveConfig, ServiceDefinition
 from .config_paths import ConfigContext, resolve_config_context
 from .envdoc import EnvDocument
-from .errors import DuplicateManagedVariableError, UnresolvedIdentityError
+from .errors import DuplicateManagedVariableError
 from .icons import DEFAULT_SERVICE_ICON
-from .identity import detect_ad_facts, resolve_primary_identity
-from .identity_facts import ADFacts
+from .identity import resolve_primary_identity
+from .identity_detectors import (
+    DEFAULT_WAIT_BUDGET_SECONDS,
+    build_detection_request,
+)
 from .identity_rules import IdentityRuleResult, evaluate_identity_rules
 from .models import (
     AppState,
     DerivedVariableState,
+    IdentityDetectionState,
     PrimaryIdentityState,
     ServiceState,
     SessionState,
@@ -104,6 +112,30 @@ def service_test_fingerprint(
     return hashlib.sha256(encoded).hexdigest()
 
 
+def unresolved_test_fingerprint(
+    *,
+    service_id: str,
+    token_var: str,
+    token: str,
+    session_token: str,
+    missing_identities: list[str],
+) -> str:
+    """Return a non-secret fingerprint for a test blocked by unresolved identities."""
+    token_digest = hmac.new(
+        session_token.encode("utf-8"),
+        token.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    payload = {
+        "service_id": service_id,
+        "token_var": token_var,
+        "token": token_digest,
+        "unresolved_test_url": sorted(missing_identities),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _basic_fingerprint_username(
     service: ServiceDefinition,
     identity_values: Mapping[str, str | None],
@@ -118,13 +150,6 @@ def _basic_fingerprint_username(
     if value is None or value == "":
         return None
     return value
-
-
-def _needs_ad_facts(config: EffectiveConfig) -> bool:
-    return any(
-        identity.source.startswith("windows_ad.")
-        for identity in config.identities.values()
-    )
 
 
 def _resolve_env_path(
@@ -170,6 +195,10 @@ def build_primary_identities(
                 explicit_value=explicit,
                 effective_value=effective,
                 source=source,  # type: ignore[arg-type]
+                detector=detected[name].detector,
+                diagnostics=list(detected[name].diagnostics)
+                if source == "unresolved"
+                else [],
             )
         )
     return out
@@ -186,10 +215,16 @@ def build_derived_states(
         current = doc.get(name)
         source_value = identity_values.get(definition.source_identity_name)
         if source_value is None or source_value == "":
-            raise UnresolvedIdentityError(
-                f"Derived variable {name} requires unresolved identity "
-                f"{definition.source_identity_name}"
+            out.append(
+                DerivedVariableState(
+                    variable_name=name,
+                    current_value=current,
+                    computed_default=None,
+                    source_identity_name=definition.source_identity_name,
+                    status="unresolved",
+                )
             )
+            continue
         if current in (None, ""):
             status = "missing"
         elif values_equal(current, source_value, definition.compare):
@@ -225,17 +260,13 @@ def build_service_states(
         token_value = doc.get(service.token_var)
         token_present = bool(token_value)
         masked = _mask_token(token_value) if token_present else None
-        resolved_token_url = resolve_url_template(
-            service.token_url_template,
-            identity_values,
-            allowed_identities=config.identities,
+        resolved_token_url, token_url_missing = _resolve_service_url(
+            service.token_url_template, identity_values, config
         )
-        resolved_test_url = resolve_url_template(
-            service.test_url_template,
-            identity_values,
-            allowed_identities=config.identities,
+        resolved_test_url, test_url_missing = _resolve_service_url(
+            service.test_url_template, identity_values, config
         )
-        if token_present:
+        if token_present and resolved_test_url is not None:
             fingerprint = service_test_fingerprint(
                 service_id=service_id,
                 token_var=service.token_var,
@@ -249,6 +280,15 @@ def build_service_states(
                     service,
                     identity_values,
                 ),
+            )
+            cached = (test_results or {}).get(service_id)
+        elif token_present:
+            fingerprint = unresolved_test_fingerprint(
+                service_id=service_id,
+                token_var=service.token_var,
+                token=token_value,
+                session_token=session_token,
+                missing_identities=test_url_missing,
             )
             cached = (test_results or {}).get(service_id)
         else:
@@ -269,9 +309,30 @@ def build_service_states(
                 resolved_test_url=resolved_test_url,
                 test_status=test_status,  # type: ignore[arg-type]
                 icon=service_icon(service.icon),
+                token_url_unresolved_identities=token_url_missing,
+                test_url_unresolved_identities=test_url_missing,
             )
         )
     return out
+
+
+def _resolve_service_url(
+    template: str,
+    identity_values: dict[str, str | None],
+    config: EffectiveConfig,
+) -> tuple[str | None, list[str]]:
+    """Resolve one service URL, or return the identities it still needs."""
+    missing = unresolved_template_identities(template, identity_values)
+    if missing:
+        return None, missing
+    return (
+        resolve_url_template(
+            template,
+            identity_values,
+            allowed_identities=config.identities,
+        ),
+        [],
+    )
 
 
 def build_app_state(
@@ -279,9 +340,13 @@ def build_app_state(
     session: SessionState,
     *,
     env_path_override: Path | None = None,
-    ad_facts_override: ADFacts | None = None,
+    detection_wait: float | None = DEFAULT_WAIT_BUDGET_SECONDS,
 ) -> AppState:
-    """The single pipeline producing AppState. Used by CLI and API alike."""
+    """The single pipeline producing AppState. Used by CLI and API alike.
+
+    `detection_wait` bounds how long to wait for background identity
+    detection; `None` waits for the detection pass to finish.
+    """
     context = config_context or resolve_config_context()
     config = load_effective_config(context)
     env_path = _resolve_env_path(config=config, env_path_override=env_path_override)
@@ -293,13 +358,14 @@ def build_app_state(
         key = next(iter(duplicates))
         raise DuplicateManagedVariableError(key=key, line_numbers=duplicates[key])
 
-    ad_facts = None
-    if _needs_ad_facts(config):
-        ad_facts = ad_facts_override if ad_facts_override is not None else detect_ad_facts()
     explicit_identity_values = {name: doc.get(name) for name in config.identities}
+    request = build_detection_request(config, explicit_identity_values)
+    snapshot = session.detector_runner.detect(request, wait=detection_wait)
     detected = evaluate_identity_rules(
         config.identities,
-        ad_facts=ad_facts,
+        detector_results=snapshot.results,
+        detector_order=request.order,
+        pending_detectors=snapshot.pending,
         explicit_values=explicit_identity_values,
     )
     identities = build_primary_identities(doc, config, detected)
@@ -324,4 +390,9 @@ def build_app_state(
         derived=derived,
         services=services,
         session=session,
+        identity_detection=IdentityDetectionState(
+            pending=bool(snapshot.pending),
+            pending_deadline_seconds=snapshot.pending_deadline_seconds,
+            next_retry_seconds=snapshot.next_retry_seconds,
+        ),
     )

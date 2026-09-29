@@ -108,6 +108,8 @@ def test_refresh_success_clears_previous_state_error() -> None:
         globalThis.Node = FakeNode;
         globalThis.document = {{
           documentElement: new FakeNode("html"),
+          visibilityState: "visible",
+          addEventListener() {{}},
           querySelector(selector) {{
             return selector.startsWith("#") ? ids.get(selector.slice(1)) || null : null;
           }},

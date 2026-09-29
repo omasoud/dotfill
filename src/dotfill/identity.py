@@ -7,14 +7,19 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 
 from .config_models import CompareMode
-from .identity_facts import ADFacts, make_ad_facts
+from .identity_facts import DetectorResult, facts_have_values, make_identity_facts
 from .value_policy import values_equal
 
 log = logging.getLogger(__name__)
+
+WINDOWS_AD_TIMEOUT_SECONDS = 15.0
+_NAME_SAM_COMPATIBLE = 2
+_NAME_USER_PRINCIPAL = 8
 
 _DNS_LABEL_RE = re.compile(
     r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$"
@@ -156,6 +161,41 @@ class _RawProbe:
     proxy_addresses: list[str] | None = None
     upn: str | None = None
     errors: list[str] | None = None
+    lookup_completed: bool = False
+
+
+def _parse_probe_output(out: str) -> _RawProbe:
+    probe = _RawProbe(errors=[], proxy_addresses=[])
+    saw_mail = False
+    for raw_line in out.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("SAM:"):
+            probe.sam = line[4:].strip() or None
+        elif line.startswith("DOMAIN:"):
+            probe.domain = line[7:].strip() or None
+        elif line.startswith("MAIL:"):
+            saw_mail = True
+            probe.mail = line[5:].strip() or None
+        elif line.startswith("UPN:"):
+            probe.upn = line[4:].strip() or None
+        elif line.startswith("PROXY:"):
+            addr = line[6:].strip()
+            if addr:
+                probe.proxy_addresses = (probe.proxy_addresses or []) + [addr]
+        elif line.startswith("ERR:"):
+            probe.errors = (probe.errors or []) + [line[4:].strip()]
+    probe.lookup_completed = saw_mail and not probe.errors
+    return probe
+
+
+def _as_text(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
 
 
 def _run_powershell_probe() -> _RawProbe:
@@ -168,51 +208,88 @@ def _run_powershell_probe() -> _RawProbe:
             [pwsh, "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=WINDOWS_AD_TIMEOUT_SECONDS,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return _RawProbe(errors=[f"PowerShell invocation failed: {exc}"])
-    out = proc.stdout or ""
-    probe = _RawProbe(errors=[], proxy_addresses=[])
-    for raw_line in out.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        if line.startswith("SAM:"):
-            probe.sam = line[4:].strip() or None
-        elif line.startswith("DOMAIN:"):
-            probe.domain = line[7:].strip() or None
-        elif line.startswith("MAIL:"):
-            probe.mail = line[5:].strip() or None
-        elif line.startswith("UPN:"):
-            probe.upn = line[4:].strip() or None
-        elif line.startswith("PROXY:"):
-            addr = line[6:].strip()
-            if addr:
-                probe.proxy_addresses = (probe.proxy_addresses or []) + [addr]
-        elif line.startswith("ERR:"):
-            probe.errors = (probe.errors or []) + [line[4:].strip()]
+    except subprocess.TimeoutExpired as exc:
+        # Never surface exc text: it embeds the generated script.
+        probe = _parse_probe_output(_as_text(exc.stdout))
+        probe.errors = [
+            f"directory lookup timed out after {WINDOWS_AD_TIMEOUT_SECONDS:g}s"
+        ]
+        probe.lookup_completed = False
+        return probe
+    except OSError as exc:
+        return _RawProbe(errors=[f"PowerShell could not start ({type(exc).__name__})"])
+    probe = _parse_probe_output(proc.stdout or "")
     if proc.returncode != 0:
         probe.errors = (probe.errors or []) + [
             f"PowerShell exit code {proc.returncode}"
         ]
-        if proc.stderr:
-            probe.errors.append(proc.stderr.strip())
+        probe.lookup_completed = False
     return probe
 
 
-def detect_ad_facts() -> ADFacts:
+def _windows_logon_names() -> tuple[str | None, str | None]:
+    """Return the SAM-compatible name and UPN without contacting a directory."""
+    if sys.platform != "win32":
+        return None, None
+    import ctypes
+    from ctypes import wintypes
+
+    try:
+        get_user_name_ex = ctypes.windll.secur32.GetUserNameExW  # type: ignore[attr-defined]
+    except (AttributeError, OSError):
+        return None, None
+    get_user_name_ex.argtypes = [
+        ctypes.c_int,
+        wintypes.LPWSTR,
+        ctypes.POINTER(wintypes.ULONG),
+    ]
+    get_user_name_ex.restype = wintypes.BOOLEAN
+
+    def read(name_format: int) -> str | None:
+        size = wintypes.ULONG(0)
+        get_user_name_ex(name_format, None, ctypes.byref(size))
+        if size.value == 0:
+            return None
+        buffer = ctypes.create_unicode_buffer(size.value)
+        if not get_user_name_ex(name_format, buffer, ctypes.byref(size)):
+            return None
+        return buffer.value or None
+
+    return read(_NAME_SAM_COMPATIBLE), read(_NAME_USER_PRINCIPAL)
+
+
+def _split_sam_compatible(value: str | None) -> tuple[str | None, str | None]:
+    if not value:
+        return None, None
+    domain, sep, sam = value.partition("\\")
+    if not sep:
+        return value, None
+    return sam or None, domain or None
+
+
+def detect_windows_ad(settings: object | None = None) -> DetectorResult:
     """Detect generic Windows AD facts without mapping to organization identities."""
+    sam_compatible, local_upn = _windows_logon_names()
+    local_sam, local_domain = _split_sam_compatible(sam_compatible)
     probe = _run_powershell_probe()
-    return make_ad_facts(
-        sam=probe.sam,
-        domain=probe.domain,
+    facts = make_identity_facts(
+        sam=probe.sam or local_sam,
+        domain=probe.domain or local_domain,
         mail=probe.mail,
-        user_principal_name=probe.upn,
+        user_principal_name=probe.upn or local_upn,
         proxy_addresses=probe.proxy_addresses or [],
-        diagnostics=list(probe.errors or []),
+        diagnostics=[f"windows_ad: {error}" for error in probe.errors or []],
     )
+    if probe.lookup_completed:
+        outcome = "complete"
+    elif facts_have_values(facts):
+        outcome = "partial"
+    else:
+        outcome = "failed"
+    return DetectorResult(detector="windows_ad", facts=facts, outcome=outcome)
 
 
 def resolve_primary_identity(

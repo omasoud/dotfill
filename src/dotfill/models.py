@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, SecretStr
 
 from .config_models import EffectiveConfig
 from .config_paths import ConfigContext
+from .identity_detectors import DetectorRunner
 
 # ---- Identity models -------------------------------------------------------
 
@@ -25,6 +26,17 @@ class PrimaryIdentityState:
     explicit_value: str | None
     effective_value: str | None
     source: Literal["detected", "aligned", "diverged", "unresolved"]
+    detector: str | None = None
+    diagnostics: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class IdentityDetectionState:
+    """Progress of background identity detection for one state build."""
+
+    pending: bool = False
+    pending_deadline_seconds: float | None = None
+    next_retry_seconds: float | None = None
 
 
 # ---- Derived variable models -----------------------------------------------
@@ -49,10 +61,12 @@ class ServiceState:
     token_var: str
     token_present: bool
     masked_token: str | None
-    resolved_token_url: str
-    resolved_test_url: str
+    resolved_token_url: str | None
+    resolved_test_url: str | None
     test_status: TestStatus
     icon: str | None = None
+    token_url_unresolved_identities: list[str] = field(default_factory=list)
+    test_url_unresolved_identities: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -101,6 +115,7 @@ class SessionState:
     test_results: dict[str, TestResult] = field(default_factory=dict)
     import_scans: dict[str, ImportScanSession] = field(default_factory=dict)
     queue_test_all_on_dashboard_load: bool = False
+    detector_runner: DetectorRunner = field(default_factory=DetectorRunner)
 
 
 # AppState is defined here as a forward-friendly dataclass; EnvDocument is
@@ -116,6 +131,9 @@ class AppState:
     derived: list[DerivedVariableState]
     services: list[ServiceState]
     session: SessionState
+    identity_detection: IdentityDetectionState = field(
+        default_factory=IdentityDetectionState
+    )
 
 
 # ---- Pydantic API payloads -------------------------------------------------

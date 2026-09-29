@@ -8,6 +8,37 @@ format.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-29
+
+### Added
+
+- Added an opt-in `entra` identity detector that silently reads the signed-in
+  user's email addresses from Microsoft Graph `/me` through the Windows sign-in
+  broker, with optional `client_id` and `tenant` settings.
+- Added the detector-neutral `email_by_domain` source and
+  `entra.email_by_domain`, plus per-detector `priority`.
+- Added background identity detection with session caching and retry backoff;
+  the dashboard shows pending detection, identity diagnostics, and the
+  detector that supplied each value, and refreshes itself when detection
+  finishes or a retry is due.
+
+### Changed
+
+- Unresolved identities no longer fail state construction. Dependent derived
+  variables are reported as `unresolved`, and service token-page and test URLs
+  resolve independently so only the affected action is disabled.
+- The Windows AD detector reads the signed-in user's SAM name and UPN without
+  contacting a directory, so they survive directory lookup failures.
+
+### Fixed
+
+- Windows AD probe timeouts no longer embed the generated probe script in
+  diagnostics.
+- Identity polling deadlines now expire when detector configuration changes
+  behind a stalled lookup, instead of keeping the dashboard polling forever.
+- Retry backoff remains capped during long failure streaks without overflowing
+  and repeatedly restarting detector probes.
+
 ## [1.4.1] - 2026-07-23
 
 ### Fixed
@@ -143,7 +174,8 @@ format.
   and web UI.
 - Added MIT licensing and PyPI publishing project metadata.
 
-[Unreleased]: https://github.com/omasoud/dotfill/compare/v1.4.1...HEAD
+[Unreleased]: https://github.com/omasoud/dotfill/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/omasoud/dotfill/compare/v1.4.1...v1.5.0
 [1.4.1]: https://github.com/omasoud/dotfill/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/omasoud/dotfill/compare/v1.3.2...v1.4.0
 [1.3.2]: https://github.com/omasoud/dotfill/compare/v1.3.1...v1.3.2

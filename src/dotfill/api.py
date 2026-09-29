@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request,
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
-from .config import resolve_url_template
+from .config import resolve_url_template, unresolved_template_identities
 from .config_paths import ConfigContext, resolve_config_context
 from .envdoc import EnvDocument
 from .errors import (
@@ -39,7 +39,12 @@ from .models import (
     TestResult,
 )
 from .open_paths import open_directory, open_env_location
-from .resolver import build_app_state, service_icon, service_test_fingerprint
+from .resolver import (
+    build_app_state,
+    service_icon,
+    service_test_fingerprint,
+    unresolved_test_fingerprint,
+)
 from .save import save_assignments
 from .service_test import run_service_test
 from .value_policy import display_value
@@ -88,6 +93,10 @@ def _state(ctx: AppContext) -> AppState:
     )
 
 
+def _unresolved_test_message(missing: list[str]) -> str:
+    return f"Service test URL needs unresolved identity {', '.join(missing)}"
+
+
 def _is_local_origin(origin: str) -> bool:
     parsed = urlsplit(origin)
     return parsed.scheme in {"http", "https"} and parsed.hostname in _LOCAL_ORIGIN_HOSTS
@@ -110,6 +119,8 @@ def _identity_payload(state: AppState) -> list[dict[str, object]]:
                 state.effective_config.identities[i.name].display,
             ),
             "source": i.source,
+            "detector": i.detector,
+            "diagnostics": list(i.diagnostics),
         }
         for i in state.identities
     ]
@@ -144,6 +155,8 @@ def _service_payload(state: AppState) -> list[dict[str, object]]:
             "masked_token": s.masked_token,
             "resolved_token_url": s.resolved_token_url,
             "resolved_test_url": s.resolved_test_url,
+            "token_url_unresolved_identities": s.token_url_unresolved_identities,
+            "test_url_unresolved_identities": s.test_url_unresolved_identities,
             "test_status": s.test_status,
             "icon": s.icon or service_icon(None),
         }
@@ -162,6 +175,11 @@ def _state_payload(state: AppState) -> dict[str, object]:
             "user_config_path": str(state.config_context.user_config_path),
         },
         "identities": _identity_payload(state),
+        "identity_detection": {
+            "pending": state.identity_detection.pending,
+            "pending_deadline_seconds": state.identity_detection.pending_deadline_seconds,
+            "next_retry_seconds": state.identity_detection.next_retry_seconds,
+        },
         "derived": _derived_payload(state),
         "services": _service_payload(state),
         "session": {
@@ -404,6 +422,27 @@ def create_app(ctx: AppContext) -> FastAPI:
             token = state.env_doc.get(svc_def.token_var)
             if not token:
                 continue
+            missing = unresolved_template_identities(
+                svc_def.test_url_template, identity_values
+            )
+            if missing:
+                message = _unresolved_test_message(missing)
+                ctx_in.session.test_results[svc_id] = TestResult(
+                    status="failed",
+                    error_message=message,
+                    fingerprint=unresolved_test_fingerprint(
+                        service_id=svc_id,
+                        token_var=svc_def.token_var,
+                        token=token,
+                        session_token=ctx_in.session.token,
+                        missing_identities=missing,
+                    ),
+                )
+                results.append(
+                    {"service_id": svc_id, "status": "failed", "error_message": message}
+                )
+                log.warning("Service test skipped for %s: unresolved identity", svc_id)
+                continue
             try:
                 resolved = resolve_url_template(
                     svc_def.test_url_template, identity_values
@@ -487,6 +526,14 @@ def create_app(ctx: AppContext) -> FastAPI:
             )
         svc_def = state.effective_config.services[service_id]
         identity_values = {i.name: i.effective_value for i in state.identities}
+        missing = unresolved_template_identities(svc_def.test_url_template, identity_values)
+        if missing:
+            return {
+                "service_id": service_id,
+                "status": "failed",
+                "http_status": None,
+                "error_message": _unresolved_test_message(missing),
+            }
         try:
             resolved = resolve_url_template(svc_def.test_url_template, identity_values)
         except UrlTemplateError as exc:

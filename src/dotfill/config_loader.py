@@ -11,17 +11,20 @@ from typing import Any, cast
 
 from .config_merge import merge_config_layers
 from .config_models import (
+    DETECTOR_NAMES,
     AuthConfig,
     AuthKind,
     CompareMode,
     DerivedVariableDefinition,
     DisplayMode,
     EffectiveConfig,
+    EntraDetectorConfig,
     IdentityDefinition,
     IdentityDetectorConfig,
     ImportAliasDefinition,
     ServiceDefinition,
     TargetConfig,
+    WindowsAdDetectorConfig,
 )
 from .config_paths import ConfigContext
 from .envdoc import is_valid_var_name
@@ -30,13 +33,24 @@ from .icons import SERVICE_ICON_KEYS
 
 SUPPORTED_VERSION = 1
 SUPPORTED_IDENTITY_SOURCES = {
+    "email_by_domain",
     "windows_ad.email_by_domain",
+    "entra.email_by_domain",
     "local_part",
     "literal",
     "env",
     "windows_ad.sam",
     "windows_ad.domain",
 }
+_EMAIL_BY_DOMAIN_SOURCES = {
+    "email_by_domain",
+    "windows_ad.email_by_domain",
+    "entra.email_by_domain",
+}
+_GUID_RE = re.compile(
+    r"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+)
+_DNS_LABEL_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
 
 _SERVICE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _PLACEHOLDER_RE = re.compile(r"\{([^{}]+)\}")
@@ -52,7 +66,9 @@ _TOP_LEVEL_KEYS = {
     "import_aliases",
 }
 _IDENTITY_SOURCE_FIELDS = {
+    "email_by_domain": {"domain"},
     "windows_ad.email_by_domain": {"domain"},
+    "entra.email_by_domain": {"domain"},
     "local_part": {"from"},
     "literal": {"value"},
     "env": {"name"},
@@ -108,7 +124,7 @@ def build_effective_config(data: Mapping[str, Any]) -> EffectiveConfig:
         services=services,
         derived=derived,
     )
-    _validate_ad_detector_dependencies(detector_cfg, identities)
+    _validate_detector_dependencies(detector_cfg, identities)
     return EffectiveConfig(
         name=name,
         target=target,
@@ -149,18 +165,52 @@ def _build_target(data: Mapping[str, Any]) -> TargetConfig:
 def _build_identity_detectors(data: Mapping[str, Any]) -> IdentityDetectorConfig:
     _reject_unknown_keys(data, {"detectors"}, "identity")
     detectors = _optional_table(data, "detectors", "identity.detectors")
-    _reject_unknown_keys(detectors, {"windows_ad"}, "identity.detectors")
-    windows_ad = _optional_table(
-        detectors, "windows_ad", "identity.detectors.windows_ad"
+    _reject_unknown_keys(detectors, {"windows_ad", "entra"}, "identity.detectors")
+    ad_path = "identity.detectors.windows_ad"
+    windows_ad = _optional_table(detectors, "windows_ad", ad_path)
+    _reject_unknown_keys(windows_ad, {"enabled", "priority"}, ad_path)
+    ad_defaults = WindowsAdDetectorConfig()
+    ad_cfg = WindowsAdDetectorConfig(
+        enabled=_optional_bool(
+            windows_ad, "enabled", f"{ad_path}.enabled", default=ad_defaults.enabled
+        ),
+        priority=_optional_int(
+            windows_ad, "priority", f"{ad_path}.priority", default=ad_defaults.priority
+        ),
     )
-    _reject_unknown_keys(windows_ad, {"enabled"}, "identity.detectors.windows_ad")
-    enabled = _optional_bool(
-        windows_ad,
-        "enabled",
-        "identity.detectors.windows_ad.enabled",
-        default=True,
+    entra_path = "identity.detectors.entra"
+    entra = _optional_table(detectors, "entra", entra_path)
+    _reject_unknown_keys(
+        entra, {"enabled", "priority", "client_id", "tenant"}, entra_path
     )
-    return IdentityDetectorConfig(windows_ad_enabled=enabled)
+    entra_defaults = EntraDetectorConfig()
+    client_id = _optional_str(entra, "client_id", f"{entra_path}.client_id")
+    if client_id is not None and not _GUID_RE.fullmatch(client_id):
+        raise ConfigSchemaError(f"{entra_path}.client_id: expected a GUID")
+    tenant = _optional_str(entra, "tenant", f"{entra_path}.tenant")
+    if tenant is not None and not _is_valid_tenant(tenant):
+        raise ConfigSchemaError(
+            f"{entra_path}.tenant: expected 'organizations', a GUID, or a DNS domain"
+        )
+    entra_cfg = EntraDetectorConfig(
+        enabled=_optional_bool(
+            entra, "enabled", f"{entra_path}.enabled", default=entra_defaults.enabled
+        ),
+        priority=_optional_int(
+            entra, "priority", f"{entra_path}.priority", default=entra_defaults.priority
+        ),
+        client_id=client_id,
+        tenant=tenant if tenant is not None else entra_defaults.tenant,
+    )
+    return IdentityDetectorConfig(windows_ad=ad_cfg, entra=entra_cfg)
+
+
+def _is_valid_tenant(value: str) -> bool:
+    if value == "organizations" or _GUID_RE.fullmatch(value):
+        return True
+    if not value or len(value) > 253:
+        return False
+    return all(_DNS_LABEL_RE.fullmatch(label) for label in value.split("."))
 
 
 def _build_identities(data: Mapping[str, Any]) -> dict[str, IdentityDefinition]:
@@ -460,7 +510,7 @@ def _validate_identity_source_fields(
     source: str,
     params: Mapping[str, object],
 ) -> None:
-    if source == "windows_ad.email_by_domain":
+    if source in _EMAIL_BY_DOMAIN_SOURCES:
         _require_param_str(params, "domain", f"identities.{name}.domain")
     elif source == "local_part":
         _require_param_str(params, "from", f"identities.{name}.from")
@@ -484,17 +534,27 @@ def _validate_identity_references(
             )
 
 
-def _validate_ad_detector_dependencies(
+def _validate_detector_dependencies(
     detector_cfg: IdentityDetectorConfig,
     identities: dict[str, IdentityDefinition],
 ) -> None:
-    if detector_cfg.windows_ad_enabled:
-        return
+    any_enabled = bool(detector_cfg.enabled_in_priority_order())
     for name, definition in identities.items():
-        if definition.source.startswith("windows_ad."):
-            raise ConfigSchemaError(
-                f"identities.{name}.source: windows_ad detector is disabled"
-            )
+        source = definition.source
+        if source == "email_by_domain":
+            if not any_enabled:
+                raise ConfigSchemaError(
+                    f"identities.{name}.source: email_by_domain requires an "
+                    "enabled identity detector"
+                )
+            continue
+        for detector in DETECTOR_NAMES:
+            if source.startswith(f"{detector}.") and not detector_cfg.is_enabled(
+                detector
+            ):
+                raise ConfigSchemaError(
+                    f"identities.{name}.source: {detector} detector is disabled"
+                )
 
 
 def _validate_url_placeholders(
@@ -612,6 +672,21 @@ def _optional_bool(
     value = data[key]
     if not isinstance(value, bool):
         raise ConfigSchemaError(f"{path}: expected boolean")
+    return value
+
+
+def _optional_int(
+    data: Mapping[str, Any],
+    key: str,
+    path: str,
+    *,
+    default: int,
+) -> int:
+    if key not in data:
+        return default
+    value = data[key]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ConfigSchemaError(f"{path}: expected integer")
     return value
 
 

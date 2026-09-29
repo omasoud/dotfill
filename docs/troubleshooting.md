@@ -95,9 +95,34 @@ This works for inherited services, identities, derived variables, and import ali
 
 ## An identity is unresolved
 
-An identity can be unresolved when dotfill cannot find a configured value, environment variable, dependent identity, or Windows AD fact. Fix it by changing the identity source, setting the referenced environment variable, adding a literal value, or putting an explicit non-empty identity assignment in the target `.env`.
+An identity can be unresolved when dotfill cannot find a configured value, environment variable, dependent identity, or detector fact. Fix it by changing the identity source, setting the referenced environment variable, adding a literal value, or putting an explicit non-empty identity assignment in the target `.env`.
 
-Unresolved identities block state construction only when enabled derived variables, service URL templates, or dependent identity rules need them.
+Unresolved identities never stop dotfill from loading. The dashboard and
+`dotfill status` show each unresolved identity with a short reason, for
+example `windows_ad: directory lookup timed out after 15s` or
+`entra: sign-in interaction required`. While detection is still running, the
+dashboard shows "detecting…" and refreshes itself.
+
+Common causes on Windows:
+
+- **Off the corporate network.** The Windows AD detector needs a reachable
+  directory controller. Reconnect to VPN, or enable the `entra` detector, which
+  queries Microsoft Graph instead.
+- **Windows Hello PIN sign-in on a cloud-joined device.** If directory lookups
+  fail with errors such as "The user name or password is incorrect" or "A
+  local error has occurred", and the System event log shows Kerberos event 19
+  ("The KDC certificate for the domain controller does not contain the KDC
+  Extended Key Usage"), the domain controllers' certificates lack the KDC
+  Authentication EKU. Signing in with a password works around it; a domain
+  administrator must fix the certificates. The `entra` detector is unaffected.
+- **Silent Entra lookup unavailable.** `entra: sign-in interaction required`
+  or `entra: client not authorized for Microsoft Graph` means tenant policy
+  does not allow the silent lookup for that client. Configure an approved
+  `client_id` (see [config-schema.md](config-schema.md#entra-detector)) or use
+  an explicit `.env` value.
+
+Failed lookups are retried automatically with backoff, so a VPN reconnect is
+picked up without restarting dotfill.
 
 For a `windows_ad.*` identity, being connected to a VPN does not by itself
 confirm that Windows can locate and query a directory controller. Check the

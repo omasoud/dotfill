@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
+from typing import Literal
+
+DetectorOutcome = Literal["complete", "partial", "failed"]
+
+_ADDRESS_TYPE_RE = re.compile(r"^[A-Za-z0-9]+:")
 
 
 @dataclass(frozen=True)
-class ADFacts:
-    """Generic Windows Active Directory facts for identity rules."""
+class IdentityFacts:
+    """Generic directory facts reported by an identity detector."""
 
     sam: str | None = None
     domain: str | None = None
@@ -18,13 +24,26 @@ class ADFacts:
     diagnostics: list[str] = field(default_factory=list)
 
 
-def collect_ad_emails(
+@dataclass(frozen=True)
+class DetectorResult:
+    """Facts from one detector run plus how far the run got."""
+
+    detector: str
+    facts: IdentityFacts
+    outcome: DetectorOutcome
+
+
+def collect_emails(
     *,
     mail: str | None = None,
     user_principal_name: str | None = None,
     proxy_addresses: list[str] | None = None,
 ) -> list[str]:
-    """Collect normalized, de-duplicated AD email addresses in stable order."""
+    """Collect normalized, de-duplicated email addresses in stable order.
+
+    Proxy addresses keep only SMTP entries; other typed addresses such as
+    `X500:` are ignored.
+    """
     out: list[str] = []
     seen: set[str] = set()
 
@@ -42,12 +61,12 @@ def collect_ad_emails(
     for address in proxy_addresses or []:
         if address.lower().startswith("smtp:"):
             add(address[5:])
-        else:
+        elif not _ADDRESS_TYPE_RE.match(address):
             add(address)
     return out
 
 
-def make_ad_facts(
+def make_identity_facts(
     *,
     sam: str | None = None,
     domain: str | None = None,
@@ -55,19 +74,24 @@ def make_ad_facts(
     user_principal_name: str | None = None,
     proxy_addresses: list[str] | None = None,
     diagnostics: list[str] | None = None,
-) -> ADFacts:
-    """Build `ADFacts` while deriving the normalized email list."""
+) -> IdentityFacts:
+    """Build `IdentityFacts` while deriving the normalized email list."""
     proxy = list(proxy_addresses or [])
-    return ADFacts(
+    return IdentityFacts(
         sam=sam,
         domain=domain,
         mail=mail,
         user_principal_name=user_principal_name,
         proxy_addresses=proxy,
-        emails=collect_ad_emails(
+        emails=collect_emails(
             mail=mail,
             user_principal_name=user_principal_name,
             proxy_addresses=proxy,
         ),
         diagnostics=list(diagnostics or []),
     )
+
+
+def facts_have_values(facts: IdentityFacts) -> bool:
+    """Return whether *facts* carry any usable identity value."""
+    return bool(facts.sam or facts.domain or facts.emails)

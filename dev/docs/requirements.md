@@ -18,13 +18,17 @@ dotfill is a generic local-only utility for maintaining configured token and ide
   behavior.
 - Preserve `.env` comments, blank lines, ordering, unrelated variables, unrelated duplicates, and line endings.
 - Write only after explicit user action.
+- Keep the dashboard and `status` usable when some configured identities
+  cannot be resolved.
 - Create at most one backup per process session before the first write.
 - Keep raw token values, dropped import values, generated auth headers/credentials, and full `.env` contents out of logs, API responses, and browser storage. Browser storage may contain only explicitly allowed non-secret UI preferences, such as the persisted color theme.
 - Keep all UI assets local to the package.
 
 ## Non-Goals
 
-- No cloud backend, accounts, telemetry, shared token storage, or remote sync.
+- No dotfill-operated cloud backend, accounts, telemetry, shared token storage,
+  or remote sync. Opt-in identity detectors may query the user's own identity
+  provider.
 - No generic built-in service catalog.
 - No browser-side persistence of secrets, session tokens, or import contents.
 - No automatic token validation except explicit Test actions.
@@ -87,6 +91,7 @@ Supported sections:
 
 - `[target]`
 - `[identity.detectors.windows_ad]`
+- `[identity.detectors.entra]`
 - `[identities.<NAME>]`
 - `[derived.<VARIABLE>]`
 - `[services.<ID>]`
@@ -129,11 +134,68 @@ Supported sources:
 - `literal`
 - `env`
 - `local_part`
+- `email_by_domain`
 - `windows_ad.email_by_domain`
 - `windows_ad.sam`
 - `windows_ad.domain`
+- `entra.email_by_domain`
 
-Windows AD detection returns generic facts only. It does not map facts to organization-specific identity names.
+Identity detectors return generic facts only. They do not map facts to
+organization-specific identity names.
+
+Supported identity detectors are `windows_ad` and `entra`, configured under
+`[identity.detectors.<name>]`:
+
+- `enabled` defaults to `true` for `windows_ad` and `false` for `entra`.
+  Entra stays opt-in because the built-in client ID yields a broadly scoped
+  token; profiles that enable it should record that tradeoff.
+- `priority` is an integer; lower values run first. It defaults to `20` for
+  `windows_ad` and `10` for `entra`. Ties are ordered by detector name.
+- `entra` also accepts an optional `client_id` (a GUID) and `tenant`
+  (`organizations`, a tenant GUID, or a DNS-safe tenant domain; default
+  `organizations`). Invalid or unsafe values are schema errors.
+
+Detector-pinned sources (`windows_ad.*`, `entra.*`) read facts only from the
+named detector, which must be enabled. `email_by_domain` requires at least one
+enabled detector and resolves to the first email in the configured domain from
+the enabled detectors in priority order.
+
+Detectors run only when an enabled identity needs their facts. Pinned sources
+always need their detector. For `email_by_domain` identities, a detector runs
+only while at least one of them is still undetected after all higher-priority
+detectors. A detector failure never fails state construction; affected
+identities become unresolved with short, non-secret diagnostics.
+
+Detector results are cached in process memory for the server session and are
+never written to disk. Each detector run has one outcome:
+
+- `complete`: the detector's primary lookup finished (Windows AD: the LDAP
+  search completed, with or without a match; Entra: Graph `/me` returned
+  success). Complete results are reused until the process exits.
+- `partial`: some facts were collected but the primary lookup did not finish,
+  for example an in-process UPN with an LDAP timeout. Partial facts are used
+  immediately, and the detector is retried.
+- `failed`: no usable facts. The detector is retried.
+
+Partial and failed results are retried with backoff, starting at 60 seconds
+and capped at 15 minutes; the backoff resets after a complete result. A
+transient network or sign-in problem therefore neither stalls refreshes nor
+becomes permanent: when the lookup succeeds again, for example after a VPN
+reconnect, missing domains resolve. A config change that affects a detector
+invalidates its cached result.
+
+Detection must not hold up the dashboard. Detection runs as a background pass
+that executes the needed detectors in priority order. Each next detector starts
+as soon as the previous one finishes without supplying every needed domain, so
+the pass continues without waiting for another state request. Each detector is
+single-flight. The dashboard's state request waits at most a short budget
+(default 2 seconds). It then returns the current results and reports detection
+as pending until the whole pass finishes, along with an upper bound on the
+pass's remaining time. It also reports when the next scheduled retry is due.
+When a retry becomes due or the page becomes visible again, an open dashboard
+rechecks automatically. Identities therefore recover, for example after a VPN
+reconnect, without a manual refresh. One-shot CLI commands such as `status`
+wait for the pass to finish, bounded by the detector timeouts.
 
 Windows AD user lookup must work when the current user can reach a directory
 controller but the device does not expose a usable computer-domain default
@@ -151,6 +213,45 @@ naming context. The lookup must:
   explicit-domain search found no matching account; and
 - preserve generic fact output and non-secret diagnostics without embedding
   any organization-specific domain.
+
+The Windows AD detector reads the current user's SAM-compatible name and user
+principal name in-process, without contacting a directory controller, before
+its LDAP lookup. Those facts remain available when the LDAP lookup fails or
+times out. Probe timeouts and failures produce short diagnostics that never
+include the generated probe script, command line, or process arguments.
+
+The `entra` detector:
+
+- runs only on Windows and reports a non-secret unavailable diagnostic on other
+  platforms;
+- obtains a Microsoft Graph access token for the signed-in work or school
+  account silently through the Windows Web Account Manager. It never shows an
+  interactive sign-in, account-picker, or consent prompt, and uses exactly one
+  request form per client mode, with no automatic format fallback:
+  - built-in client ID: the Microsoft Graph resource without a scope, the only
+    form that the built-in client ID is pre-authorized for;
+  - configured `client_id`: the delegated `User.Read` scope with the Microsoft
+    Graph resource;
+- does not claim least privilege for the built-in client ID: its tokens carry
+  that client's broad pre-authorized delegated scopes. Only a configured app
+  registration that is consented for `User.Read` alone can yield a
+  least-privilege token;
+- is best-effort: silent acquisition may be unavailable when tenant policy
+  requires interaction or blocks the client. Such failures are reported as
+  short non-secret diagnostics, and identities fall back to lower-priority
+  detectors or explicit `.env` values;
+- uses a built-in Microsoft public client ID unless `client_id` is configured.
+  The built-in ID is not guaranteed to work in every tenant; tenants that block
+  it can configure an approved app registration through `client_id`;
+- reads only `mail`, `userPrincipalName`, and `proxyAddresses` from Graph
+  `/me`, keeps only SMTP proxy addresses (other types such as `X500:` are
+  ignored), and normalizes them like Windows AD facts; `otherMails` is
+  ignored;
+- keeps the access token inside the helper process: it is never logged,
+  written, cached by dotfill, or returned to Python, the API, or the browser;
+  and
+- contacts only the Microsoft identity platform and Microsoft Graph, only when
+  enabled in config. It is not a dotfill-operated backend.
 
 Resolution model:
 
@@ -171,7 +272,11 @@ Identity equality uses the identity definition's `compare` mode. With
 casefold-equivalent casing are `aligned`; the effective value remains the
 original explicit value.
 
-Unresolved identities fail state construction only when required by enabled derived variables, service URL templates, or dependent identity rules.
+Unresolved identities never fail state construction. Dependent identity rules,
+derived variables, and service URL templates that need an unresolved identity
+report their own unresolved state instead. An unresolved detector-sourced
+identity carries the non-secret diagnostics explaining why detection failed,
+and detected identities record which detector supplied the value.
 
 dotfill never writes identity variables automatically.
 
@@ -203,12 +308,12 @@ Derived state values are:
   under the derived comparison mode.
 - `diverged`: the current non-empty `.env` value differs from the computed
   default under the derived comparison mode.
+- `unresolved`: the source identity is unresolved, so no computed default is
+  available; any current `.env` value is still reported.
 
 Disabled derived variables do not appear in derived state. A derived variable
 whose source identity is unresolved is not eligible for automatic fill or
-explicit reset; unresolved identities fail state construction only when required
-by enabled derived variables, service URL templates, or dependent identity
-rules.
+explicit reset, and it does not block state construction.
 
 Derived equality uses the derived definition's `compare` mode. With
 `compare = "casefold"`, current and computed values that differ only by
@@ -291,6 +396,15 @@ case-insensitive duplicate `test_headers`, auth-generated header conflicts
 with `test_headers`, basic auth with both or neither username source, basic
 literal usernames containing `:`, and `username_identity` references to
 unknown or disabled identities.
+
+Service `token_url` and `test_url` may reference identities as `{NAME}`
+placeholders. The two URLs resolve independently, and each tracks the
+unresolved identities it needs. When the token-page URL needs an unresolved
+identity, only its token-page link is unavailable. When the test URL does, only
+the service test is unavailable. Saving the service token always works, and
+other services are unaffected. When the test URL is unresolved, a
+single-service test returns a non-secret `409`, test-all reports a per-service
+failure and continues, and an import-row test reports a failure for that row.
 
 Service tests:
 
@@ -423,6 +537,11 @@ When `locked_profile` is set:
 - Reject unexpected `Origin` headers on mutating API requests.
 - Emit no permissive CORS headers.
 - Map domain errors to non-secret JSON responses.
+- Return `/api/state` successfully when identities are unresolved, reporting
+  unresolved identities, derived variables, and service URLs as item states
+  rather than as a request error. Also report the identity detection status:
+  whether a detection pass is still pending, the remaining-time bound for that
+  pass, and when the next scheduled retry is due.
 - Serve packaged `.js` assets with an explicit JavaScript media type instead of
   inheriting host or operating-system MIME mappings.
 - Treat `POST /api/derived/{variable_name}/default` as an idempotent desired-state
@@ -438,6 +557,13 @@ When `locked_profile` is set:
 - Keep the target `.env` path visually primary.
 - Show config directory in a collapsed `dotfill config` disclosure, including profile directory when a profile is active.
 - Render dynamic identities, derived variables, and services.
+- Show unresolved identities, derived variables, and service URLs inline with
+  a short non-secret reason; disable only the actions that need the missing
+  value.
+- While identity detection is pending, show a pending indicator and poll state
+  until the pass finishes, bounded by the server-reported remaining pass time.
+  Also re-fetch state once when a reported retry becomes due and whenever the
+  page becomes visible again.
 - Disable a derived-variable default action immediately while its request is in
   flight and suppress additional requests for the same row until it settles.
 - Show the package version as `v<dotfill-version>` for direct launches. When
@@ -467,7 +593,11 @@ Run a profile wrapper or edit config.toml.
 ## Documentation Requirements
 
 - README describes generic TOML configuration, config locations, CLI usage, privacy, wrapper entrypoints, and links to user documentation under `docs/`.
-- User-facing `docs/config-schema.md` documents schema, merge rules, disable semantics, identity sources, identity/derived `display` and `compare`, import aliases, `tls_verify`, and the supported service icon keys.
+- User-facing `docs/config-schema.md` documents schema, merge rules, disable semantics, identity sources, identity detectors with their `priority` and Entra options, identity/derived `display` and `compare`, import aliases, `tls_verify`, and the supported service icon keys.
 - User-facing docs include getting-started and troubleshooting guidance.
+- Troubleshooting covers unresolved identities, including off-network
+  directory lookups, Windows Hello sign-in on cloud-joined devices whose domain
+  controller certificates lack the KDC Authentication EKU, and silent Entra
+  token failures.
 - Examples use neutral domains such as `example.com`.
 - Override-only `config.toml` examples include `version = 1`.
