@@ -818,7 +818,7 @@ milliseconds because the Windows broker caches tokens.
       Graph calls; verify recovery after the original worker exits.
 - [x] ENTRA-BROKER-08 Keep one Entra lookup active per process until its worker
       exits, skip subsequent work after its deadline, and bound HTTP waits.
-- [ ] ENTRA-BROKER-09 Document timeout and retry behavior, run the release
+- [x] ENTRA-BROKER-09 Document timeout and retry behavior, run the release
       checks, and publish and verify 1.5.1 on GitHub and PyPI.
 
 Pre-release verification (2026-09-29): all 442 tests pass, including six
@@ -828,6 +828,15 @@ run, and the isolated wheel's CLI help works. Open code, secret, and dependency
 alert counts are zero. Stale AnyIO alerts #3 and #4 were marked inaccurate
 with evidence: GitHub's dependency inventory reported 4.13.0 while the current
 remote and release lockfiles already resolve 4.15.1 (patched minimum 4.14.2).
+
+Release verification (2026-09-29): commit `d7f8cb3` is tagged `v1.5.1` and
+[published on GitHub](https://github.com/omasoud/dotfill/releases/tag/v1.5.1).
+The [publishing workflow](https://github.com/omasoud/dotfill/actions/runs/36623206081)
+passed all 442 tests on Linux and uploaded the wheel and sdist through trusted
+publishing. [PyPI 1.5.1](https://pypi.org/project/dotfill/1.5.1/) lists both
+distributions without yanks, and a fresh isolated Windows installation from
+PyPI passed `dotfill --help`. Antivirus reactions were not measured by these
+release checks; earlier device evidence is recorded above.
 
 ## Future Roadmap
 
