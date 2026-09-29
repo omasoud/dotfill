@@ -739,6 +739,11 @@ password-sign-in runs are still pending.
 
 ### Phase 4 — Documentation and release
 
+Released 1.5.0 on 2026-09-29. Verification passed: 427 automated tests,
+CLI/module help smoke checks, wheel and source builds with metadata and asset
+inspection, the GitHub trusted-publishing workflow, and a fresh installation
+from PyPI. The manual device/VPN checks above remain open.
+
 - [x] ID-RESILIENCE-20 Update `docs/config-schema.md` with detector
       `priority`, the `entra` detector options, `email_by_domain` and
       `entra.email_by_domain`, and the unresolved-state behavior.
@@ -759,7 +764,7 @@ password-sign-in runs are still pending.
       overrides as the manual fallback.
 - [x] ID-RESILIENCE-22 Update README and getting-started examples where
       detector configuration appears, using neutral domains.
-- [ ] ID-RESILIENCE-23 Run the full verification matrix, update the
+- [x] ID-RESILIENCE-23 Run the full verification matrix, update the
       current-status and verification checklists, add a CHANGELOG entry, and
       release a minor version so wrapper packages can raise their dotfill
       floor.
